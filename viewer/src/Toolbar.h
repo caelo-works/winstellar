@@ -28,6 +28,8 @@ public:
     // Stretch-mode toggles are mutually exclusive (radio-style).
     void set_stretch_auto_active(bool on);
     void set_stretch_none_active(bool on);
+    // Greys out Prev/Next when no file is loaded.
+    void set_nav_enabled(bool enabled);
 
 private:
     HWND  hwnd_       = nullptr;

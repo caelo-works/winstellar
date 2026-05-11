@@ -12,7 +12,12 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <memory>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -182,9 +187,60 @@ constexpr int kCmd_RotateLeft     = 107;
 constexpr int kCmd_RotateRight    = 108;
 constexpr int kCmd_StretchNone    = 109;
 constexpr int kCmd_StretchAuto    = 110;
+constexpr int kCmd_PrevFile       = 111;
+constexpr int kCmd_NextFile       = 112;
+
+// Worker → UI postback. wParam = generation, lParam = ViewerWindow::LoadResult*.
+constexpr UINT  WM_APP_LOAD_DONE = WM_APP + 1;
+// Spinner animation timer (~60 Hz). Only running while loading_ is true.
+constexpr UINT_PTR kTimerSpinner = 1;
+constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
 
 template <typename T>
 void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+bool has_astro_extension(const wchar_t* name) {
+    const wchar_t* ext = ::PathFindExtensionW(name);
+    if (!ext || !*ext) return false;
+    return ::_wcsicmp(ext, L".fit")  == 0
+        || ::_wcsicmp(ext, L".fits") == 0
+        || ::_wcsicmp(ext, L".xisf") == 0;
+}
+
+// Enumerate sibling astro files in the directory of `path`, natural-sorted
+// (so img2 < img10) and case-insensitive. Returns empty on failure; the
+// current file itself is included so callers can locate it by name.
+std::vector<std::wstring> enumerate_astro_siblings(const std::wstring& path) {
+    std::vector<std::wstring> out;
+    if (path.empty()) return out;
+
+    wchar_t dir[MAX_PATH] = {};
+    if (wcscpy_s(dir, MAX_PATH, path.c_str()) != 0) return out;
+    if (!::PathRemoveFileSpecW(dir)) return out;
+
+    wchar_t pattern[MAX_PATH] = {};
+    if (wcscpy_s(pattern, MAX_PATH, dir) != 0) return out;
+    if (!::PathAppendW(pattern, L"*"))   return out;
+
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = ::FindFirstFileExW(pattern, FindExInfoBasic, &fd,
+                                  FindExSearchNameMatch, nullptr,
+                                  FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE) return out;
+
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (!has_astro_extension(fd.cFileName)) continue;
+        out.emplace_back(fd.cFileName);
+    } while (::FindNextFileW(h, &fd));
+    ::FindClose(h);
+
+    std::sort(out.begin(), out.end(),
+              [](const std::wstring& a, const std::wstring& b) {
+                  return ::StrCmpLogicalW(a.c_str(), b.c_str()) < 0;
+              });
+    return out;
+}
 
 }  // namespace
 
@@ -241,6 +297,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     toolbar_.set_headers_active (true);
     toolbar_.set_stretch_auto_active(true);  // default = auto stretch
     toolbar_.set_stretch_none_active(false);
+    toolbar_.set_nav_enabled(false);         // no file yet → Prev/Next greyed
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -264,6 +321,10 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
         {FVIRTKEY,                       VK_SUBTRACT, kCmd_ZoomOut},
         {FVIRTKEY,                       'R',         kCmd_RotateRight},
         {FSHIFT | FVIRTKEY,              'R',         kCmd_RotateLeft},
+        {FVIRTKEY,                       VK_LEFT,     kCmd_PrevFile},
+        {FVIRTKEY,                       VK_RIGHT,    kCmd_NextFile},
+        {FVIRTKEY,                       VK_PRIOR,    kCmd_PrevFile},
+        {FVIRTKEY,                       VK_NEXT,     kCmd_NextFile},
     };
     accel_ = ::CreateAcceleratorTableW(accel_entries, _countof(accel_entries));
 
@@ -340,6 +401,25 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             }
             break;
         }
+        case WM_TIMER:
+            if (wp == kTimerSpinner) {
+                // Only invalidate a small box around the spinner — the dark
+                // veil and underlying bitmap haven't changed since the prior
+                // frame, so repainting the full viewport every 16 ms would
+                // burn GPU on huge bitmaps.
+                const RECT vp = self->viewport_rect();
+                const int cx = (vp.left + vp.right) / 2;
+                const int cy = (vp.top  + vp.bottom) / 2;
+                const int pad = static_cast<int>(kSpinnerRadius) + 12;
+                RECT spin = { cx - pad, cy - pad, cx + pad, cy + pad };
+                ::InvalidateRect(hwnd, &spin, FALSE);
+                return 0;
+            }
+            break;
+        case WM_APP_LOAD_DONE:
+            self->on_load_finished(static_cast<std::uint64_t>(wp),
+                                   reinterpret_cast<LoadResult*>(lp));
+            return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
             ::PostQuitMessage(0);
@@ -428,42 +508,141 @@ void ViewerWindow::apply_stretch() {
     safe_release(bitmap_);
 }
 
-void ViewerWindow::load_file(const wchar_t* path) {
-    auto loaded = fitsx::load_from_file(path);
+// Heap-allocated bundle passed from the worker thread back to the UI thread
+// via PostMessage. Owns large buffers (FitsImage, RenderedBitmap) — the UI
+// move-steals them out before destroying it.
+struct ViewerWindow::LoadResult {
+    bool                  success = false;
+    std::string           error;
+    std::wstring          path;
+    fitsx::FitsImage      image;
+    fitsx::StretchParams  stretch;
+    fitsx::RenderedBitmap rendered;
+    fitsx::AnalysisResult analysis;
+};
 
-    if (!loaded.success) {
+void ViewerWindow::load_file(const wchar_t* path) {
+    if (!path || !*path) return;
+
+    const std::uint64_t gen = load_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    // Show the spinner immediately — the worker may take seconds for big XISFs.
+    loading_ = true;
+    if (const wchar_t* name = ::PathFindFileNameW(path)) {
+        loading_filename_ = name;
+    } else {
+        loading_filename_ = path;
+    }
+    ::SetTimer(hwnd_, kTimerSpinner, 16, nullptr);
+    invalidate_viewport();
+
+    const HWND        hwnd_target = hwnd_;
+    const std::wstring path_copy(path);
+    const StretchMode mode = stretch_mode_;
+
+    std::thread([hwnd_target, gen, path_copy, mode]() {
+        auto result = std::make_unique<LoadResult>();
+        result->path = path_copy;
+
+        auto loaded = fitsx::load_from_file(path_copy.c_str());
+        if (!loaded.success) {
+            result->success = false;
+            result->error   = std::move(loaded.error);
+            ::PostMessageW(hwnd_target, WM_APP_LOAD_DONE,
+                           static_cast<WPARAM>(gen),
+                           reinterpret_cast<LPARAM>(result.release()));
+            return;
+        }
+        result->image    = std::move(loaded.image);
+        result->stretch  = (mode == StretchMode::Auto)
+                           ? fitsx::compute_auto_stretch(result->image)
+                           : fitsx::StretchParams{};
+        result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
+
+        const std::string ckey = fitsx::compute_cache_key_from_file(path_copy.c_str());
+        if (!ckey.empty()) {
+            if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
+                result->analysis = *cached;
+            } else {
+                result->analysis = fitsx::run_analysis(result->image);
+                fitsx::AnalysisCache::instance().store(ckey, result->analysis);
+            }
+        } else {
+            result->analysis = fitsx::run_analysis(result->image);
+        }
+        result->success = true;
+
+        ::PostMessageW(hwnd_target, WM_APP_LOAD_DONE,
+                       static_cast<WPARAM>(gen),
+                       reinterpret_cast<LPARAM>(result.release()));
+    }).detach();
+}
+
+void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
+    std::unique_ptr<LoadResult> r(raw);
+    // Drop stale results (user spammed Prev/Next while a slow load was in flight).
+    if (gen != load_gen_.load(std::memory_order_relaxed)) return;
+    // Window may already be tearing down — PostMessage races with WM_DESTROY.
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+
+    loading_ = false;
+    loading_filename_.clear();
+    ::KillTimer(hwnd_, kTimerSpinner);
+
+    if (!r->success) {
         wchar_t msg[512] = {};
-        swprintf_s(msg, L"Could not open FITS file:\n%hs", loaded.error.c_str());
+        swprintf_s(msg, L"Could not open FITS file:\n%hs", r->error.c_str());
         ::MessageBoxW(hwnd_, msg, L"WinStellar", MB_OK | MB_ICONWARNING);
+        invalidate_viewport();
         return;
     }
-    image_ = std::move(loaded.image);
-    apply_stretch();   // recomputes params + bitmap based on stretch_mode_
-    loaded_path_ = path;
+
+    image_       = std::move(r->image);
+    stretch_     = r->stretch;
+    rendered_    = std::move(r->rendered);
+    loaded_path_ = std::move(r->path);
+    // Bitmap was created from the old rendered_ buffer — rebuild on next render.
+    safe_release(bitmap_);
 
     headers_.update(image_.headers);
-
-    // Run image analysis (cache hit -> instant; miss -> ~300 ms).
-    // Storing the result populates the same SQLite cache the shell extension
-    // reads, so XISF columns light up in Explorer after the user opens the
-    // file once in the viewer.
-    const std::string ckey = fitsx::compute_cache_key_from_file(path);
-    fitsx::AnalysisResult ar;
-    if (!ckey.empty()) {
-        if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
-            ar = *cached;
-        } else {
-            ar = fitsx::run_analysis(image_);
-            fitsx::AnalysisCache::instance().store(ckey, ar);
-        }
-    } else {
-        ar = fitsx::run_analysis(image_);
-    }
-    analysis_.update(ar);
+    analysis_.update(r->analysis);
 
     zoom_to_fit();
     update_title();
     invalidate_viewport();
+    toolbar_.set_nav_enabled(true);
+}
+
+void ViewerWindow::navigate_sibling(int step) {
+    if (loaded_path_.empty() || step == 0) return;
+    auto siblings = enumerate_astro_siblings(loaded_path_);
+    if (siblings.empty()) return;
+
+    const wchar_t* current_name = ::PathFindFileNameW(loaded_path_.c_str());
+    int idx = -1;
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (::_wcsicmp(siblings[i].c_str(), current_name) == 0) {
+            idx = static_cast<int>(i);
+            break;
+        }
+    }
+    // Current file isn't in the list (rare — e.g. extension we don't enumerate
+    // anymore, or it just got deleted). Treat as "start before the first".
+    const int n = static_cast<int>(siblings.size());
+    if (idx < 0) idx = (step > 0) ? -1 : 0;
+
+    const int next_idx = ((idx + step) % n + n) % n;  // wrap around
+    if (next_idx == idx) return;  // only one sibling, no-op
+
+    wchar_t dir[MAX_PATH] = {};
+    if (wcscpy_s(dir, MAX_PATH, loaded_path_.c_str()) != 0) return;
+    if (!::PathRemoveFileSpecW(dir)) return;
+
+    wchar_t target[MAX_PATH] = {};
+    if (wcscpy_s(target, MAX_PATH, dir) != 0) return;
+    if (!::PathAppendW(target, siblings[next_idx].c_str())) return;
+
+    load_file(target);
 }
 
 void ViewerWindow::layout() {
@@ -565,6 +744,48 @@ void ViewerWindow::render() {
             rt_->SetTransform(D2D1::Matrix3x2F::Identity());
         }
         (void)bb_h;  // computed for symmetry / future use
+    }
+
+    // While a load is in flight, dim the viewport and draw an 8-dot spinner
+    // over the top. We're still inside the viewport clip from above.
+    if (loading_) {
+        ID2D1SolidColorBrush* veil_brush = nullptr;
+        if (SUCCEEDED(rt_->CreateSolidColorBrush(
+                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f), &veil_brush))) {
+            const D2D1_RECT_F vrc = D2D1::RectF(
+                static_cast<float>(vpr.left),  static_cast<float>(vpr.top),
+                static_cast<float>(vpr.right), static_cast<float>(vpr.bottom));
+            rt_->FillRectangle(vrc, veil_brush);
+            veil_brush->Release();
+        }
+
+        ID2D1SolidColorBrush* dot_brush = nullptr;
+        // Same cyan accent the toolbar uses.
+        if (SUCCEEDED(rt_->CreateSolidColorBrush(
+                D2D1::ColorF(0x7dd3fc), &dot_brush))) {
+            const float cx = (vpr.left + vpr.right) * 0.5f;
+            const float cy = (vpr.top  + vpr.bottom) * 0.5f;
+
+            // Lead-dot angle advances ~1.2 turn / second; trailing dots fade.
+            const double t = ::GetTickCount64() * 0.001;
+            constexpr int n_dots = 8;
+            constexpr float two_pi = 6.2831853f;
+            const float lead = static_cast<float>(
+                std::fmod(t * 1.2 * two_pi, static_cast<double>(two_pi)));
+
+            for (int i = 0; i < n_dots; ++i) {
+                const float a = lead - i * (two_pi / n_dots);
+                const float dx = kSpinnerRadius * std::cos(a);
+                const float dy = kSpinnerRadius * std::sin(a);
+                // Lead = full opacity, tail fades to ~15 %.
+                const float alpha = 1.0f - (i / static_cast<float>(n_dots - 1)) * 0.85f;
+                dot_brush->SetOpacity(alpha);
+                rt_->FillEllipse(
+                    D2D1::Ellipse(D2D1::Point2F(cx + dx, cy + dy), 3.5f, 3.5f),
+                    dot_brush);
+            }
+            dot_brush->Release();
+        }
     }
 
     rt_->PopAxisAlignedClip();
@@ -708,6 +929,8 @@ void ViewerWindow::on_keydown(WPARAM vk) {
 void ViewerWindow::on_command(int id) {
     switch (id) {
         case kCmd_Open:           on_open_dialog(); break;
+        case kCmd_PrevFile:       navigate_sibling(-1); ::SetFocus(hwnd_); break;
+        case kCmd_NextFile:       navigate_sibling(+1); ::SetFocus(hwnd_); break;
         case kCmd_ToggleAnalysis: {
             const bool show = !analysis_.visible();
             analysis_.set_visible(show);

@@ -18,6 +18,8 @@ constexpr int kCmd_RotateLeft     = 107;
 constexpr int kCmd_RotateRight    = 108;
 constexpr int kCmd_StretchNone    = 109;
 constexpr int kCmd_StretchAuto    = 110;
+constexpr int kCmd_PrevFile       = 111;
+constexpr int kCmd_NextFile       = 112;
 
 constexpr int kButtonW = 44;
 constexpr int kButtonH = 44;  // matches Toolbar::kHeight so buttons fill the bar
@@ -27,6 +29,7 @@ constexpr COLORREF kBg          = RGB(0x0b, 0x0d, 0x10);
 constexpr COLORREF kBgHover     = RGB(0x18, 0x1c, 0x22);
 constexpr COLORREF kBgPressed   = RGB(0x22, 0x28, 0x30);
 constexpr COLORREF kFg          = RGB(0xE0, 0xE2, 0xE5);
+constexpr COLORREF kFgDisabled  = RGB(0x55, 0x5b, 0x63);
 constexpr COLORREF kAccent      = RGB(0x7d, 0xd3, 0xfc);
 constexpr COLORREF kSeparator   = RGB(0x22, 0x26, 0x2c);
 
@@ -55,10 +58,14 @@ LRESULT CALLBACK toolbar_subproc(HWND h, UINT m, WPARAM w, LPARAM l,
     return ::DefSubclassProc(h, m, w, l);
 }
 
-// Layout: Open | sep | Fit / 1:1 / Z- / Z+ | sep | Rot L / Rot R | sep |
-//         RAW / Auto (stretch) | sep | Analysis / Headers (sidebar toggles)
+// Layout: Open | sep | Prev / Next | sep | Fit / 1:1 / Z- / Z+ | sep |
+//         Rot L / Rot R | sep | RAW / Auto (stretch) | sep |
+//         Analysis / Headers (sidebar toggles)
 constexpr ButtonSpec kButtons[] = {
     { kCmd_Open,            L"\xE8E5", L"Open... (Ctrl+O)",                false, false },
+    { 0,                    L"",       L"",                                  false, false }, // separator
+    { kCmd_PrevFile,        L"\xE76B", L"Previous image (← / PgUp)",   false, false },
+    { kCmd_NextFile,        L"\xE76C", L"Next image (→ / PgDn)",       false, false },
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_FitToWindow,     L"\xE740", L"Fit to window (F)",                false, false },
     { kCmd_Zoom100,         L"1:1",    L"Actual size (1)",                  true,  false },
@@ -174,6 +181,12 @@ void Toolbar::set_stretch_none_active(bool on) {
     ::SendMessageW(hwnd_, TB_CHECKBUTTON, kCmd_StretchNone, MAKELPARAM(on ? TRUE : FALSE, 0));
 }
 
+void Toolbar::set_nav_enabled(bool enabled) {
+    if (!hwnd_) return;
+    ::SendMessageW(hwnd_, TB_ENABLEBUTTON, kCmd_PrevFile, MAKELPARAM(enabled ? TRUE : FALSE, 0));
+    ::SendMessageW(hwnd_, TB_ENABLEBUTTON, kCmd_NextFile, MAKELPARAM(enabled ? TRUE : FALSE, 0));
+}
+
 LRESULT Toolbar::on_customdraw(LPNMTBCUSTOMDRAW nm) const {
     switch (nm->nmcd.dwDrawStage) {
         case CDDS_PREPAINT: {
@@ -208,11 +221,18 @@ LRESULT Toolbar::on_customdraw(LPNMTBCUSTOMDRAW nm) const {
             }
             if (!spec) return CDRF_SKIPDEFAULT;
 
-            // 3. Glyph / label. Hovered or pressed → accent cyan, otherwise neutral light.
+            // 3. Glyph / label. Disabled → dimmed grey; hovered/pressed/checked →
+            //    accent cyan; otherwise neutral light.
             HFONT font = spec->is_text ? label_font_ : mdl2_font_;
             HFONT old  = static_cast<HFONT>(::SelectObject(hdc, font));
-            COLORREF fg = ((st & CDIS_HOT) || (st & CDIS_SELECTED) || (st & CDIS_CHECKED))
-                          ? kAccent : kFg;
+            COLORREF fg;
+            if (st & CDIS_DISABLED) {
+                fg = kFgDisabled;
+            } else if ((st & CDIS_HOT) || (st & CDIS_SELECTED) || (st & CDIS_CHECKED)) {
+                fg = kAccent;
+            } else {
+                fg = kFg;
+            }
             ::SetTextColor(hdc, fg);
             ::SetBkMode(hdc, TRANSPARENT);
             ::DrawTextW(hdc, spec->glyph, -1, &rc,

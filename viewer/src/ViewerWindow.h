@@ -4,6 +4,8 @@
 #include <shellapi.h>   // HDROP
 #include <d2d1.h>
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 
 #include "fits_core/fits_image.h"
@@ -27,7 +29,18 @@ private:
     void release_render_target();
     bool ensure_d2d_bitmap();
 
+    // Kick off an async load on a worker thread. UI stays responsive; the
+    // result is posted back via WM_APP_LOAD_DONE and committed on the UI
+    // thread. Stale results (e.g. user spammed Next) are discarded via a
+    // generation token.
     void load_file(const wchar_t* path);
+    struct LoadResult;
+    void on_load_finished(std::uint64_t gen, LoadResult* r);
+
+    // Walk siblings in the current file's directory (.fit/.fits/.xisf,
+    // natural-sort order) and load the next/previous one. step = +1 or -1.
+    // Wraps around. No-op if no file is currently loaded.
+    void navigate_sibling(int step);
     void render();
     void layout();
     RECT viewport_rect() const;       // image area, excludes headers panel
@@ -80,4 +93,11 @@ private:
     POINT drag_start_ = {};
     float drag_start_off_x_ = 0.0f;
     float drag_start_off_y_ = 0.0f;
+
+    // Async-load state. load_gen_ bumps for every begin_load() so workers
+    // can tell whether their result is still wanted. loading_ drives the
+    // spinner overlay + Prev/Next gating.
+    std::atomic<std::uint64_t> load_gen_{0};
+    bool          loading_         = false;
+    std::wstring  loading_filename_;   // shown under the spinner
 };

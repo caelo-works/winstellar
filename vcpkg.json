@@ -6,7 +6,8 @@
     "dependencies": [
         {
             "name": "cfitsio",
-            "default-features": false
+            "default-features": false,
+            "features": ["pthreads"]
         },
         "sqlite3",
         "pugixml"
