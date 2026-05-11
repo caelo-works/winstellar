@@ -1,0 +1,117 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required for the `release` job to attach assets to a tag
+
+jobs:
+  build:
+    name: Build (Windows x64)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # so the CMake git-info step can read full history
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up vcpkg (manifest mode, baseline-pinned)
+        uses: lukka/run-vcpkg@v11
+        with:
+          # Pulls vcpkg at the baseline SHA listed in vcpkg.json and enables
+          # GitHub Actions binary caching automatically (cache key derived
+          # from vcpkg.json + the baseline).
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      - name: Configure
+        # CMake reads VCPKG_ROOT (set by lukka/run-vcpkg) via the preset.
+        run: cmake --preset x64-windows-msvc
+
+      - name: Build (Release)
+        run: cmake --build build --config Release
+
+      - name: Verify build outputs
+        shell: pwsh
+        run: |
+          $required = @(
+            'WinStellar.exe', 'WinStellarShellExt.dll', 'FitsProps.propdesc',
+            'cfitsio.dll', 'sqlite3.dll', 'pugixml.dll', 'z.dll'
+          )
+          foreach ($f in $required) {
+            $p = "build/bin/Release/$f"
+            if (-not (Test-Path $p)) {
+              throw "Missing build artifact: $p"
+            }
+            Write-Host "  $f"
+          }
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinStellar-bin
+          path: |
+            build/bin/Release/WinStellar.exe
+            build/bin/Release/WinStellarShellExt.dll
+            build/bin/Release/FitsProps.propdesc
+            build/bin/Release/cfitsio.dll
+            build/bin/Release/sqlite3.dll
+            build/bin/Release/pugixml.dll
+            build/bin/Release/z.dll
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        # -SkipBuild: the project is already built in the previous step. The
+        # script just packages the existing binaries into a single .exe.
+        # No signing yet — we'll wire SignPath in via a later step that
+        # downloads this artifact, signs it, and re-uploads.
+        run: ./installer/build_installer.ps1 -SkipBuild
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinStellarSetup
+          path: build/installer/WinStellarSetup-*.exe
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: WinStellarSetup
+          path: ./dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/WinStellarSetup-*.exe
+          generate_release_notes: true   # auto changelog from PR titles since last tag
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}  # vX.Y.Z-beta1 → prerelease
+          fail_on_unmatched_files: true
