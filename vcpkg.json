@@ -1,0 +1,14 @@
+{
+    "name": "winstellar",
+    "version-string": "0.1.0",
+    "description": "WinStellar - Windows FITS viewer + Explorer shell extensions for astrophotography",
+    "builtin-baseline": "12dcccadfe573d0eaa6c67a968413ded7805d256",
+    "dependencies": [
+        {
+            "name": "cfitsio",
+            "default-features": false
+        },
+        "sqlite3",
+        "pugixml"
+    ]
+}

@@ -1,0 +1,20 @@
+# Default: auto-detect text vs binary, normalize text to LF in the repo
+* text=auto eol=lf
+
+# Tools that genuinely require CRLF on Windows
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+*.iss       text eol=crlf
+*.manifest  text eol=crlf
+*.rc        text eol=crlf
+*.def       text eol=crlf
+*.propdesc  text eol=crlf
+
+# Binary assets
+*.ico       binary
+*.png       binary
+*.jpg       binary
+*.fit       binary
+*.fits      binary
+*.xisf      binary

@@ -1,0 +1,40 @@
+# Build / IDE outputs
+build/
+out/
+.vs/
+.vscode/
+.idea/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+
+# vcpkg
+vcpkg_installed/
+
+# MSVC artifacts
+*.user
+*.suo
+*.ipdb
+*.iobj
+*.pdb
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Logs / scratch
+*.log
+*.tmp
+*.bak
+
+# Windows / WSL noise
+desktop.ini
+Thumbs.db
+*:Zone.Identifier
+
+# Local-only / private assets (logo source kept outside the repo)
+*.svg
+local/
+private/
+.claude/

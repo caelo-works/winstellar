@@ -1,0 +1,17 @@
+// Generated from CMakeLists.txt project VERSION + git state at configure time.
+// Do not edit by hand.
+#pragma once
+
+#define FITS_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define FITS_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define FITS_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define FITS_VERSION_STR  "@PROJECT_VERSION@"
+#define FITS_VERSION_RC    @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+
+// Build provenance — gathered by CMake from `git` at configure time.
+#define FITS_VERSION_GIT_SHA     "@FITS_GIT_SHA@"
+#define FITS_VERSION_GIT_DIRTY    @FITS_GIT_DIRTY@
+#define FITS_VERSION_BUILD_DATE  "@FITS_BUILD_DATE@"
+
+// Human-friendly "0.1.3 — abc12345 — 2026-05-12" (optionally with "-dirty").
+#define FITS_VERSION_FULL_STR    "@FITS_VERSION_FULL@"

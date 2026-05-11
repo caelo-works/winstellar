@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="utf-8"?>
+<schema xmlns="http://schemas.microsoft.com/windows/2006/propertydescription"
+        schemaVersion="1.0">
+    <productInfo
+        publisher="WinStellar"
+        product="WinStellar"/>
+    <propertyDescriptionList publisher="WinStellar" product="WinStellar">
+        <propertyDescription name="Astro.FITS.Object"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="2">
+            <description>FITS OBJECT keyword (target name).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Object" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="20" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.ExposureTime"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="3">
+            <description>FITS EXPTIME (exposure time in seconds).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Exposure (s)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Filter"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="4">
+            <description>FITS FILTER keyword.</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Filter" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.DateObs"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="5">
+            <description>FITS DATE-OBS observation timestamp (UTC).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Date observed" sortDescription="OldestNewest"/>
+            <typeInfo type="DateTime" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="20" alignment="Left" displayType="DateTime">
+                <dateTimeFormat formatPattern="yyyy-MM-dd HH:mm:ss"/>
+            </displayInfo>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Gain"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="6">
+            <description>FITS GAIN keyword (camera gain).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Gain" sortDescription="LowestHighest"/>
+            <typeInfo type="UInt32" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="6" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.CCDTemp"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="7">
+            <description>FITS CCD-TEMP (sensor temperature in degrees Celsius).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Sensor temp (°C)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Telescope"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="8">
+            <description>FITS TELESCOP keyword.</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Telescope" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="20" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Instrument"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="9">
+            <description>FITS INSTRUME keyword.</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Instrument" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="20" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Offset"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="10">
+            <description>FITS OFFSET keyword (camera offset / black level).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Offset" sortDescription="LowestHighest"/>
+            <typeInfo type="UInt32" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="6" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.BayerPattern"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="11">
+            <description>FITS BAYERPAT keyword (Bayer matrix pattern).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Bayer pattern" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="6" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.FocalLength"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="12">
+            <description>FITS FOCALLEN keyword (focal length in mm).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Focal length (mm)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.FocalRatio"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="13">
+            <description>FITS FOCRATIO keyword (focal ratio f/N).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Focal ratio (f/)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.FocuserPosition"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="14">
+            <description>FITS FOCPOS / FOCUSPOS keyword (focuser position).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Focuser position" sortDescription="LowestHighest"/>
+            <typeInfo type="UInt32" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.ImageType"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="15">
+            <description>FITS IMAGETYP keyword (LIGHT / DARK / FLAT / BIAS).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Image type" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.Software"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="16">
+            <description>FITS SWCREATE keyword (software that produced the file).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Software" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="20" alignment="Left" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.AnalysisStarCount"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="17">
+            <description>Number of stars detected in the frame.</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Stars" sortDescription="LowestHighest"/>
+            <typeInfo type="UInt32" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="6" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.AnalysisHFR"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="18">
+            <description>Median Half-Flux Radius across detected stars (pixels).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="HFR (px)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.AnalysisHFRStdDev"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="19">
+            <description>Standard deviation of HFR across stars (focus / tilt uniformity).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="HFR SD" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.AnalysisFWHM"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="20">
+            <description>Median FWHM derived from second moments (pixels).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="FWHM (px)" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.AnalysisEccentricity"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="21">
+            <description>Median star eccentricity (0 = round, 1 = streak).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Eccentricity" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="8" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatMean"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="22">
+            <description>Image-wide mean pixel value (ADU).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Pixel mean" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatStdDev"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="23">
+            <description>Image-wide pixel standard deviation (ADU).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Pixel SD" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatMedian"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="24">
+            <description>Image-wide pixel median (ADU).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Pixel median" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatMAD"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="25">
+            <description>Image-wide pixel median absolute deviation (ADU).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Pixel MAD" sortDescription="LowestHighest"/>
+            <typeInfo type="Double" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="10" alignment="Right" displayType="Number"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatMin"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="26">
+            <description>Minimum pixel value with count (e.g. "212 (1x)").</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Min" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="12" alignment="Right" displayType="String"/>
+        </propertyDescription>
+        <propertyDescription name="Astro.FITS.StatMax"
+                             formatID="{C1F2A3B4-5D6E-7F89-0123-456789ABCDEF}"
+                             propID="27">
+            <description>Maximum pixel value with count (e.g. "65535 (51x)" — flags saturation).</description>
+            <searchInfo isColumn="true"/>
+            <labelInfo label="Max" sortDescription="AToZ"/>
+            <typeInfo type="String" multipleValues="false"
+                      isInnate="true" isViewable="true" isQueryable="true"/>
+            <displayInfo defaultColumnWidth="12" alignment="Right" displayType="String"/>
+        </propertyDescription>
+    </propertyDescriptionList>
+</schema>

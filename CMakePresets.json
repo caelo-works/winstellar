@@ -1,0 +1,28 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "x64-windows-msvc",
+            "displayName": "x64 Windows (MSVC + vcpkg)",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_TARGET_TRIPLET": "x64-windows"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "x64-windows-debug",
+            "configurePreset": "x64-windows-msvc",
+            "configuration": "Debug"
+        },
+        {
+            "name": "x64-windows-release",
+            "configurePreset": "x64-windows-msvc",
+            "configuration": "Release"
+        }
+    ]
+}
