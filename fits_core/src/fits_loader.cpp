@@ -122,18 +122,22 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
         return finish_with_error(fptr, status, "fits_read_pix: ");
     }
 
-    // FITS row 1 == bottom of image; flip to top-down to match Windows bitmap order.
+    // Single pass over the pixel data:
+    //  - flip row order (FITS row 1 == bottom of image; we store top-down)
+    //  - sanitize NaN/Inf in place (so downstream hot loops can drop their
+    //    isfinite branch — see fits_render.cpp / analysis.cpp / Histogram.cpp)
+    //  - capture global min/max
+    // Fusing these three was previously three separate passes over npix.
     std::vector<float> flipped(npix);
+    float vmin = std::numeric_limits<float>::infinity();
+    float vmax = -std::numeric_limits<float>::infinity();
     for (long y = 0; y < height; ++y) {
         const float* src = raw.data() + static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width);
         float* dst = flipped.data() + static_cast<size_t>(y) * static_cast<size_t>(width);
-        std::memcpy(dst, src, sizeof(float) * static_cast<size_t>(width));
-    }
-
-    float vmin = std::numeric_limits<float>::infinity();
-    float vmax = -std::numeric_limits<float>::infinity();
-    for (float v : flipped) {
-        if (std::isfinite(v)) {
+        for (long x = 0; x < width; ++x) {
+            float v = src[x];
+            if (!std::isfinite(v)) v = 0.0f;   // NaN/Inf -> 0 (renders as black)
+            dst[x] = v;
             if (v < vmin) vmin = v;
             if (v > vmax) vmax = v;
         }

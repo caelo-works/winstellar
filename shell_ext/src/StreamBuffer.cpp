@@ -18,20 +18,20 @@ HRESULT StreamBuffer::init(IStream* stream, size_t max_bytes) {
     LARGE_INTEGER zero = {};
     stream->Seek(zero, STREAM_SEEK_SET, nullptr);
 
-    buffer_.resize(want_bytes);
+    // Uninitialized allocation: the loop below overwrites every byte read,
+    // so zero-fill would only matter on the short-read tail (handled by
+    // not advertising those bytes via size_).
+    buffer_.reset(new uint8_t[want_bytes]);
+    size_ = 0;
 
-    size_t offset = 0;
-    while (offset < buffer_.size()) {
-        const ULONG chunk = static_cast<ULONG>(
-            (buffer_.size() - offset) > 0x100000 ? 0x100000 : (buffer_.size() - offset));
+    while (size_ < want_bytes) {
+        const ULONG remaining = static_cast<ULONG>(want_bytes - size_);
+        const ULONG chunk = (remaining > 0x100000) ? 0x100000u : remaining;
         ULONG got = 0;
-        hr = stream->Read(buffer_.data() + offset, chunk, &got);
-        if (FAILED(hr)) { buffer_.clear(); total_size_ = 0; return hr; }
+        hr = stream->Read(buffer_.get() + size_, chunk, &got);
+        if (FAILED(hr)) { clear(); return hr; }
         if (got == 0) break;
-        offset += got;
-    }
-    if (offset != buffer_.size()) {
-        buffer_.resize(offset);
+        size_ += got;
     }
     return S_OK;
 }

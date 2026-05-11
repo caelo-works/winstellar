@@ -200,16 +200,27 @@ LoadResult load_xisf_from_memory(const void* buffer, size_t size) {
     img.source_type = h.sample_format;
     img.data.resize(npix);
 
-    auto store = [&](float v, size_t i) {
-        // XISF top-down row order matches our convention (no flip needed,
-        // unlike FITS).
-        img.data[i] = v;
-    };
-
+    // XISF top-down row order matches our convention (no flip needed). We
+    // dispatch on sample format, copy/convert into img.data, sanitize NaN/Inf
+    // in place (so downstream hot loops can skip their isfinite branch) and
+    // capture min/max in the same pass.
     float vmin = std::numeric_limits<float>::infinity();
     float vmax = -std::numeric_limits<float>::infinity();
-    auto track = [&](float v) {
-        if (std::isfinite(v)) {
+    float* dst = img.data.data();
+
+    auto scan_minmax = [&](size_t n) {
+        // Integer-derived data is finite by construction; only call the
+        // sanitizer on the float paths below.
+        for (size_t i = 0; i < n; ++i) {
+            const float v = dst[i];
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+    };
+    auto sanitize_and_scan = [&](size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            float v = dst[i];
+            if (!std::isfinite(v)) { v = 0.0f; dst[i] = v; }
             if (v < vmin) vmin = v;
             if (v > vmax) vmax = v;
         }
@@ -217,49 +228,45 @@ LoadResult load_xisf_from_memory(const void* buffer, size_t size) {
 
     switch (h.sample_format) {
         case PixelType::Float32: {
-            const float* src = reinterpret_cast<const float*>(pix);
-            for (size_t i = 0; i < npix; ++i) { float v = src[i]; store(v, i); track(v); }
+            // Bulk memcpy is much faster than per-element copy; the conversion
+            // loop only sanitizes / scans.
+            std::memcpy(dst, pix, npix * sizeof(float));
+            sanitize_and_scan(npix);
             break;
         }
         case PixelType::Float64: {
             const double* src = reinterpret_cast<const double*>(pix);
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(src[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
+            sanitize_and_scan(npix);
             break;
         }
         case PixelType::UInt8: {
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(pix[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(pix[i]);
+            scan_minmax(npix);
             break;
         }
         case PixelType::UInt16: {
             const uint16_t* src = reinterpret_cast<const uint16_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(src[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
+            scan_minmax(npix);
             break;
         }
         case PixelType::Int16: {
             const int16_t* src = reinterpret_cast<const int16_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(src[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
+            scan_minmax(npix);
             break;
         }
         case PixelType::UInt32: {
             const uint32_t* src = reinterpret_cast<const uint32_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(src[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
+            scan_minmax(npix);
             break;
         }
         case PixelType::Int32: {
             const int32_t* src = reinterpret_cast<const int32_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) {
-                float v = static_cast<float>(src[i]); store(v, i); track(v);
-            }
+            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
+            scan_minmax(npix);
             break;
         }
         default:
