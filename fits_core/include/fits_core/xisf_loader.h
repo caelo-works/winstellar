@@ -46,12 +46,12 @@ struct XisfParseResult {
     XisfHeaderInfo header;
     uint32_t xml_length = 0;     // bytes 8..12 of the file
 };
-XisfParseResult parse_xisf_header(const void* buffer, size_t size);
+[[nodiscard]] XisfParseResult parse_xisf_header(const void* buffer, size_t size);
 
 // Load a full XISF image from an in-memory buffer (header + pixel data both
 // present). Currently supports uncompressed Float32 mono and RGB; for RGB
 // only channel 0 (R) is exposed in FitsImage.data — RGB compositing is left
 // to a later iteration. Returns LoadResult mirroring fits_loader.h.
-LoadResult load_xisf_from_memory(const void* buffer, size_t size);
+[[nodiscard]] LoadResult load_xisf_from_memory(const void* buffer, size_t size);
 
 }  // namespace fitsx

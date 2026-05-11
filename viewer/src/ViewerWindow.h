@@ -80,6 +80,11 @@ private:
     ID2D1HwndRenderTarget* rt_ = nullptr;
     ID2D1Bitmap* bitmap_ = nullptr;
 
+    // Cached brushes for the loading-spinner overlay. Created lazily on
+    // first paint, released with the render target.
+    ID2D1SolidColorBrush* veil_brush_   = nullptr;
+    ID2D1SolidColorBrush* spinner_brush_= nullptr;
+
     // shared_ptr so an in-flight render worker can keep using the previous
     // image safely when the user navigates to the next file mid-render.
     std::shared_ptr<const fitsx::FitsImage> image_;

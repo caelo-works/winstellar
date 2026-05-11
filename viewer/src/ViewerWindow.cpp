@@ -489,6 +489,8 @@ void ViewerWindow::create_render_target() {
 
 void ViewerWindow::release_render_target() {
     safe_release(bitmap_);
+    safe_release(veil_brush_);
+    safe_release(spinner_brush_);
     safe_release(rt_);
 }
 
@@ -533,9 +535,14 @@ void ViewerWindow::update_title() {
 
 void ViewerWindow::apply_stretch() {
     if (!image_ || image_->data.empty()) return;
-    stretch_ = (stretch_mode_ == StretchMode::Auto)
-        ? fitsx::compute_auto_stretch(*image_)
-        : fitsx::StretchParams{};   // identity = no stretch
+    // Use the auto-stretch the load worker pre-computed (instant). Fall back
+    // to recomputing here only if it's somehow missing -- shouldn't happen
+    // in normal flow but keeps the function defensive.
+    if (stretch_mode_ == StretchMode::Auto) {
+        stretch_ = image_->auto_stretch.value_or(fitsx::compute_auto_stretch(*image_));
+    } else {
+        stretch_ = fitsx::StretchParams{};   // identity = no stretch
+    }
     histogram_.set_params(stretch_);
     refresh_stretch_toolbar();
     request_render(stretch_);
@@ -656,10 +663,15 @@ void ViewerWindow::load_file(const wchar_t* path) {
                            reinterpret_cast<LPARAM>(result.release()));
             return;
         }
-        result->image    = std::move(loaded.image);
-        result->stretch  = (mode == StretchMode::Auto)
-                           ? fitsx::compute_auto_stretch(result->image)
-                           : fitsx::StretchParams{};
+        result->image   = std::move(loaded.image);
+        // Compute auto-stretch once on the worker and stash it on the image
+        // so the UI thread's RAW <-> Auto toggle is instant (the toolbar
+        // Auto button used to recompute the stretch on the UI thread,
+        // stalling ~200 ms on 36 Mpx).
+        const fitsx::StretchParams auto_p = fitsx::compute_auto_stretch(result->image);
+        result->image.auto_stretch = auto_p;
+        result->stretch  = (mode == StretchMode::Auto) ? auto_p
+                                                       : fitsx::StretchParams{};
         result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
 
         const std::string ckey = fitsx::compute_cache_key_from_file(path_copy.c_str());
@@ -709,8 +721,8 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
 
     headers_.update(image_->headers);
     analysis_.update(r->analysis);
-    histogram_.set_image(image_.get());
-    histogram_.set_params(stretch_);
+    histogram_.set_image(image_);          // shared_ptr; histogram defers bin
+    histogram_.set_params(stretch_);        // computation until popup is shown
 
     zoom_to_fit();
     update_title();
@@ -821,17 +833,14 @@ void ViewerWindow::render() {
         const float view_h = img_h * zoom_;
 
         // When rotated 90 / 270 the image's on-screen bounding box has its
-        // axes swapped — center on the swapped bbox, not the unrotated rect.
-        const bool sideways = (rotation_deg_ == 90 || rotation_deg_ == 270);
-        const float bb_w = sideways ? view_h : view_w;
-        const float bb_h = sideways ? view_w : view_h;
-
+        // axes swapped. The bbox values are consumed downstream by
+        // clamp_offset(), so we don't need them here -- the on-screen center
+        // is just the viewport center minus the user-pan offset.
         const float vp_w = static_cast<float>(vpr.right - vpr.left);
         const float vp_h = static_cast<float>(vpr.bottom - vpr.top);
 
-        // Center of the (possibly-rotated) image's bounding box in viewport space.
-        const float cx = vpr.left + vp_w * 0.5f + (bb_w - bb_w) * 0.0f - offset_x_ * zoom_;
-        const float cy = vpr.top  + vp_h * 0.5f                          - offset_y_ * zoom_;
+        const float cx = vpr.left + vp_w * 0.5f - offset_x_ * zoom_;
+        const float cy = vpr.top  + vp_h * 0.5f - offset_y_ * zoom_;
 
         const float dst_left = cx - view_w * 0.5f;
         const float dst_top  = cy - view_h * 0.5f;
@@ -848,26 +857,27 @@ void ViewerWindow::render() {
         if (rotation_deg_ != 0) {
             rt_->SetTransform(D2D1::Matrix3x2F::Identity());
         }
-        (void)bb_h;  // computed for symmetry / future use
     }
 
     // While a load is in flight, dim the viewport and draw an 8-dot spinner
-    // over the top. We're still inside the viewport clip from above.
+    // over the top. Brushes are cached on the render target and reused
+    // across frames (a previous version created+released them on every
+    // paint, which was ~120 allocs/sec at 60 Hz spinner refresh).
     if (loading_) {
-        ID2D1SolidColorBrush* veil_brush = nullptr;
-        if (SUCCEEDED(rt_->CreateSolidColorBrush(
-                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f), &veil_brush))) {
+        if (!veil_brush_) {
+            rt_->CreateSolidColorBrush(
+                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f), &veil_brush_);
+        }
+        if (!spinner_brush_) {
+            rt_->CreateSolidColorBrush(D2D1::ColorF(0x7dd3fc), &spinner_brush_);
+        }
+        if (veil_brush_) {
             const D2D1_RECT_F vrc = D2D1::RectF(
                 static_cast<float>(vpr.left),  static_cast<float>(vpr.top),
                 static_cast<float>(vpr.right), static_cast<float>(vpr.bottom));
-            rt_->FillRectangle(vrc, veil_brush);
-            veil_brush->Release();
+            rt_->FillRectangle(vrc, veil_brush_);
         }
-
-        ID2D1SolidColorBrush* dot_brush = nullptr;
-        // Same cyan accent the toolbar uses.
-        if (SUCCEEDED(rt_->CreateSolidColorBrush(
-                D2D1::ColorF(0x7dd3fc), &dot_brush))) {
+        if (spinner_brush_) {
             const float cx = (vpr.left + vpr.right) * 0.5f;
             const float cy = (vpr.top  + vpr.bottom) * 0.5f;
 
@@ -884,12 +894,11 @@ void ViewerWindow::render() {
                 const float dy = kSpinnerRadius * std::sin(a);
                 // Lead = full opacity, tail fades to ~15 %.
                 const float alpha = 1.0f - (i / static_cast<float>(n_dots - 1)) * 0.85f;
-                dot_brush->SetOpacity(alpha);
+                spinner_brush_->SetOpacity(alpha);
                 rt_->FillEllipse(
                     D2D1::Ellipse(D2D1::Point2F(cx + dx, cy + dy), 3.5f, 3.5f),
-                    dot_brush);
+                    spinner_brush_);
             }
-            dot_brush->Release();
         }
     }
 

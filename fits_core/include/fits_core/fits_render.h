@@ -19,9 +19,9 @@ struct RenderedBitmap {
 // If max_width or max_height is > 0, the result is downsampled (nearest-neighbor
 // box average) to fit within those bounds while preserving aspect ratio.
 // Pass 0 for both to render at native resolution.
-RenderedBitmap render_to_bgra(const FitsImage& img,
-                              const StretchParams& stretch,
-                              int max_width = 0,
-                              int max_height = 0);
+[[nodiscard]] RenderedBitmap render_to_bgra(const FitsImage& img,
+                                            const StretchParams& stretch,
+                                            int max_width = 0,
+                                            int max_height = 0);
 
 }  // namespace fitsx

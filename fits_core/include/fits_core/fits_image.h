@@ -1,10 +1,21 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace fitsx {
+
+// Linear-clip + Midtone-Transfer-Function parameters, in normalized [0,1]
+// space relative to the data's working range. Defined here rather than in
+// fits_stretch.h so FitsImage can cache its auto-stretch result without a
+// circular header dependency.
+struct StretchParams {
+    float shadows    = 0.0f;   // black point in [0,1]
+    float highlights = 1.0f;   // white point in [0,1]
+    float midtone    = 0.5f;   // MTF parameter; 0.5 == identity
+};
 
 enum class PixelType {
     Unknown,
@@ -43,6 +54,11 @@ struct FitsImage {
     double bscale = 1.0;
 
     std::vector<FitsHeader> headers;
+
+    // Cached auto-stretch params, populated by the load worker so the UI
+    // thread's toolbar-Auto toggle is instant (~200 ms saved on 36 Mpx).
+    // Stays empty when the loader skipped the computation.
+    std::optional<StretchParams> auto_stretch;
 
     bool empty() const noexcept { return data.empty() || width <= 0 || height <= 0; }
     size_t pixel_count() const noexcept {

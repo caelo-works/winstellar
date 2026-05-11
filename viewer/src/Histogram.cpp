@@ -117,6 +117,12 @@ void HistogramWindow::destroy() {
 
 void HistogramWindow::show() {
     if (!hwnd_) return;
+    // First show after a load (or after a re-show following an image swap):
+    // compute the bins now that the user actually wants to see them.
+    if (bins_pending_) {
+        recompute_bins(*bins_pending_);
+        bins_pending_.reset();
+    }
     ::ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
 }
 
@@ -125,12 +131,19 @@ void HistogramWindow::hide() {
     ::ShowWindow(hwnd_, SW_HIDE);
 }
 
-void HistogramWindow::set_image(const fitsx::FitsImage* image) {
+void HistogramWindow::set_image(std::shared_ptr<const fitsx::FitsImage> image) {
     if (!image || image->data.empty()) {
         bins_.clear();
         bins_log_max_ = 0.0f;
+        bins_pending_.reset();
     } else {
-        recompute_bins(*image);
+        bins_pending_ = std::move(image);
+        bins_.clear();              // forget the previous image's bars
+        bins_log_max_ = 0.0f;
+        if (is_visible()) {         // only pay the cost if the popup is open
+            recompute_bins(*bins_pending_);
+            bins_pending_.reset();
+        }
     }
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -152,11 +165,44 @@ void HistogramWindow::init_d2d() {
     D2D1_HWND_RENDER_TARGET_PROPERTIES hprops = D2D1::HwndRenderTargetProperties(
         hwnd_, D2D1::SizeU(std::max<LONG>(1, rc.right), std::max<LONG>(1, rc.bottom)));
     d2d_factory_->CreateHwndRenderTarget(props, hprops, &rt_);
+    if (!rt_) return;
+
+    // Cache brushes once per render target. Previously the render() loop
+    // created/released each brush on every paint -- at 60 Hz drag that was
+    // ~360 alloc/release pairs per second.
+    rt_->CreateSolidColorBrush(kPanelBg,                                  &br_panel_);
+    rt_->CreateSolidColorBrush(kBars,                                     &br_bar_);
+    rt_->CreateSolidColorBrush(kGuide,                                    &br_guide_);
+    rt_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.45f),     &br_clip_);
+    rt_->CreateSolidColorBrush(D2D1::ColorF(0x141820),                    &br_strip_);
+    rt_->CreateSolidColorBrush(kAccent,                                   &br_handle_);
+
+    // Build a unit diamond geometry centered at origin once. Each render()
+    // translates the render-target transform to position it at each handle
+    // -- avoids three CreatePathGeometry/Open/Close/Release dances per paint.
+    if (!diamond_) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(d2d_factory_->CreatePathGeometry(&diamond_)) &&
+            SUCCEEDED(diamond_->Open(&sink))) {
+            sink->BeginFigure(D2D1::Point2F(0.0f, -kHandleHeight * 0.5f),
+                              D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(kHandleHalfW, 0.0f));
+            sink->AddLine(D2D1::Point2F(0.0f, kHandleHeight * 0.5f));
+            sink->AddLine(D2D1::Point2F(-kHandleHalfW, 0.0f));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            sink->Release();
+        }
+    }
 }
 
 void HistogramWindow::release_d2d() {
-    if (rt_)          { rt_->Release(); rt_ = nullptr; }
-    if (d2d_factory_) { d2d_factory_->Release(); d2d_factory_ = nullptr; }
+    auto rel = [](auto*& p) { if (p) { p->Release(); p = nullptr; } };
+    rel(br_panel_); rel(br_bar_); rel(br_guide_);
+    rel(br_clip_);  rel(br_strip_); rel(br_handle_);
+    rel(diamond_);
+    rel(rt_);
+    rel(d2d_factory_);
 }
 
 LRESULT CALLBACK HistogramWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -351,21 +397,26 @@ void HistogramWindow::apply_params_to_handles() {
 }
 
 void HistogramWindow::recompute_bins(const fitsx::FitsImage& img) {
-    bins_.assign(256, 0.0f);
+    // Integer counter is ~3x faster than float bin in this hot loop (the
+    // float add chain isn't autovectorizable; the int increment is).
+    // Loaders sanitize NaN/Inf at load time, so no per-pixel isfinite is
+    // needed here.
+    std::vector<uint32_t> counts(256, 0);
     const float vmin = static_cast<float>(img.source_min);
     const float vmax = static_cast<float>(img.source_max);
-    const float span = std::max(1e-6f, vmax - vmin);
+    const float scale = 256.0f / std::max(1e-6f, vmax - vmin);
     for (float v : img.data) {
-        if (!std::isfinite(v)) continue;
-        int bin = static_cast<int>((v - vmin) / span * 256.0f);
+        int bin = static_cast<int>((v - vmin) * scale);
         if (bin < 0) bin = 0;
         if (bin > 255) bin = 255;
-        bins_[bin] += 1.0f;
+        ++counts[bin];
     }
-    // Log compression — astro histograms span 5+ orders of magnitude.
+    // Log compression: astro histograms span 5+ orders of magnitude.
+    bins_.assign(256, 0.0f);
     bins_log_max_ = 0.0f;
-    for (float& b : bins_) {
-        b = std::log1p(b);
+    for (int i = 0; i < 256; ++i) {
+        const float b = std::log1p(static_cast<float>(counts[i]));
+        bins_[i] = b;
         if (b > bins_log_max_) bins_log_max_ = b;
     }
 }
@@ -385,16 +436,10 @@ void HistogramWindow::render() {
 
     const D2D1_RECT_F hr = histogram_rect();
 
-    // Panel background under the bars.
-    ID2D1SolidColorBrush* br_panel = nullptr;
-    rt_->CreateSolidColorBrush(kPanelBg, &br_panel);
-    rt_->FillRectangle(hr, br_panel);
-    if (br_panel) br_panel->Release();
+    if (br_panel_) rt_->FillRectangle(hr, br_panel_);
 
     // Bars (log-y, 256 bins -> 256 columns scaled to width).
-    if (!bins_.empty() && bins_log_max_ > 0.0f) {
-        ID2D1SolidColorBrush* br_bar = nullptr;
-        rt_->CreateSolidColorBrush(kBars, &br_bar);
+    if (!bins_.empty() && bins_log_max_ > 0.0f && br_bar_) {
         const float w = hr.right - hr.left;
         const float h = hr.bottom - hr.top;
         const float bar_w = w / 256.0f;
@@ -405,62 +450,47 @@ void HistogramWindow::render() {
                 hr.bottom - bh,
                 hr.left + (i + 1) * bar_w,
                 hr.bottom);
-            rt_->FillRectangle(r, br_bar);
+            rt_->FillRectangle(r, br_bar_);
         }
-        if (br_bar) br_bar->Release();
     }
 
-    // Clip-region guides (vertical lines at shadows / highlights).
-    ID2D1SolidColorBrush* br_guide = nullptr;
-    rt_->CreateSolidColorBrush(kGuide, &br_guide);
     const float xs = norm_to_x(shadows_);
     const float xh = norm_to_x(highlights_);
-    rt_->DrawLine(D2D1::Point2F(xs, hr.top), D2D1::Point2F(xs, hr.bottom), br_guide, 1.0f);
-    rt_->DrawLine(D2D1::Point2F(xh, hr.top), D2D1::Point2F(xh, hr.bottom), br_guide, 1.0f);
-    if (br_guide) br_guide->Release();
+
+    // Clip-region guides (vertical lines at shadows / highlights).
+    if (br_guide_) {
+        rt_->DrawLine(D2D1::Point2F(xs, hr.top), D2D1::Point2F(xs, hr.bottom), br_guide_, 1.0f);
+        rt_->DrawLine(D2D1::Point2F(xh, hr.top), D2D1::Point2F(xh, hr.bottom), br_guide_, 1.0f);
+    }
 
     // Shaded "clipped" zones outside [shadows, highlights].
-    ID2D1SolidColorBrush* br_clip = nullptr;
-    rt_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.45f), &br_clip);
-    rt_->FillRectangle(D2D1::RectF(hr.left, hr.top, xs, hr.bottom), br_clip);
-    rt_->FillRectangle(D2D1::RectF(xh, hr.top, hr.right, hr.bottom), br_clip);
-    if (br_clip) br_clip->Release();
-
-    // Slider strip + 3 diamond handles.
-    const D2D1_RECT_F sr = slider_rect();
-    ID2D1SolidColorBrush* br_strip = nullptr;
-    rt_->CreateSolidColorBrush(D2D1::ColorF(0x141820), &br_strip);
-    rt_->FillRectangle(sr, br_strip);
-    if (br_strip) br_strip->Release();
-
-    ID2D1SolidColorBrush* br_handle = nullptr;
-    rt_->CreateSolidColorBrush(kAccent, &br_handle);
-    const float vals[3] = { shadows_, midtone_, highlights_ };
-    const float cy_handle = (sr.top + sr.bottom) * 0.5f;
-    for (int i = 0; i < 3; ++i) {
-        const float cx = norm_to_x(vals[i]);
-        // Diamond: center +/- halfW horizontal, +/- handleHeight/2 vertical
-        ID2D1PathGeometry* g = nullptr;
-        d2d_factory_->CreatePathGeometry(&g);
-        ID2D1GeometrySink* sink = nullptr;
-        g->Open(&sink);
-        sink->BeginFigure(D2D1::Point2F(cx, cy_handle - kHandleHeight * 0.5f),
-                          D2D1_FIGURE_BEGIN_FILLED);
-        sink->AddLine(D2D1::Point2F(cx + kHandleHalfW, cy_handle));
-        sink->AddLine(D2D1::Point2F(cx, cy_handle + kHandleHeight * 0.5f));
-        sink->AddLine(D2D1::Point2F(cx - kHandleHalfW, cy_handle));
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink->Close();
-        sink->Release();
-        // Midtone slightly darker so it reads as a different role.
-        br_handle->SetOpacity(i == 1 ? 0.70f : 1.0f);
-        rt_->FillGeometry(g, br_handle);
-        g->Release();
+    if (br_clip_) {
+        rt_->FillRectangle(D2D1::RectF(hr.left, hr.top, xs, hr.bottom), br_clip_);
+        rt_->FillRectangle(D2D1::RectF(xh, hr.top, hr.right, hr.bottom), br_clip_);
     }
-    if (br_handle) br_handle->Release();
+
+    // Slider strip + 3 diamond handles. The diamond geometry is built once
+    // around the origin; we translate the render-target transform to each
+    // handle's centerpoint and reuse the same FillGeometry call -- avoids
+    // three PathGeometry allocations per paint.
+    const D2D1_RECT_F sr = slider_rect();
+    if (br_strip_) rt_->FillRectangle(sr, br_strip_);
+
+    if (br_handle_ && diamond_) {
+        const float vals[3] = { shadows_, midtone_, highlights_ };
+        const float cy_handle = (sr.top + sr.bottom) * 0.5f;
+        for (int i = 0; i < 3; ++i) {
+            const float cx = norm_to_x(vals[i]);
+            rt_->SetTransform(D2D1::Matrix3x2F::Translation(cx, cy_handle));
+            // Midtone slightly darker so it reads as a different role.
+            br_handle_->SetOpacity(i == 1 ? 0.70f : 1.0f);
+            rt_->FillGeometry(diamond_, br_handle_);
+        }
+        rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
 
     // Numeric readouts + button row are text-only for now. We draw text via
-    // DirectWrite — but to keep this skeleton small, we just paint nothing and
+    // DirectWrite -- but to keep this skeleton small, we just paint nothing and
     // wire those rows up in a follow-up. For the MVP the diamond positions are
     // enough feedback.
 

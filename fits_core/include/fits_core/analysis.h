@@ -36,7 +36,7 @@ struct AnalysisResult {
 //     moved-from image). Bump to invalidate those bogus entries.
 constexpr int kAnalysisSchemaVersion = 2;
 
-AnalysisResult run_analysis(const FitsImage& img);
+[[nodiscard]] AnalysisResult run_analysis(const FitsImage& img);
 
 // Stable 64-bit FNV-1a hash of (first 8 KB of buffer || size_be). Returned as
 // 16 lowercase hex characters. Used as the analysis-cache primary key — a

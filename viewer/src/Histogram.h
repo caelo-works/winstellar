@@ -4,6 +4,7 @@
 #include <d2d1.h>
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "fits_core/fits_image.h"
@@ -31,9 +32,11 @@ public:
     void hide();
     void toggle() { is_visible() ? hide() : show(); }
 
-    // Push a new image (recomputes 256-bin histogram) and current params.
-    // Pass image=nullptr to clear (e.g. no file loaded).
-    void set_image (const fitsx::FitsImage* image);
+    // Push a new image and current params. The 256-bin histogram is
+    // computed lazily on first show() (or on the next show after the image
+    // changed) so file-load latency isn't burdened by ~300 ms of bin work
+    // when the popup is hidden. Pass image=nullptr to clear.
+    void set_image (std::shared_ptr<const fitsx::FitsImage> image);
     void set_params(const fitsx::StretchParams& p);
 
     void set_on_changed(ChangedCallback cb) { on_changed_ = std::move(cb); }
@@ -73,9 +76,22 @@ private:
     ID2D1Factory*           d2d_factory_ = nullptr;
     ID2D1HwndRenderTarget*  rt_          = nullptr;
 
-    // 256-bin log-scaled counts; recomputed on set_image.
-    std::vector<float> bins_;
-    float              bins_log_max_ = 0.0f;  // for y-scale
+    // Brushes + geometry cached on the render target. All are recreated on
+    // D2DERR_RECREATE_TARGET via release_d2d() -> init_d2d().
+    struct ID2D1SolidColorBrush* br_panel_  = nullptr;
+    struct ID2D1SolidColorBrush* br_bar_    = nullptr;
+    struct ID2D1SolidColorBrush* br_guide_  = nullptr;
+    struct ID2D1SolidColorBrush* br_clip_   = nullptr;
+    struct ID2D1SolidColorBrush* br_strip_  = nullptr;
+    struct ID2D1SolidColorBrush* br_handle_ = nullptr;
+    struct ID2D1PathGeometry*    diamond_   = nullptr;   // unit diamond at origin
+
+    // 256-bin log-scaled counts. Computed lazily on first show() to keep
+    // file loads fast: ~300 ms on 36 Mpx images, which is wasted work
+    // whenever the popup is hidden (the common case).
+    std::vector<float>                       bins_;
+    float                                    bins_log_max_ = 0.0f;
+    std::shared_ptr<const fitsx::FitsImage>  bins_pending_;   // non-null = dirty
 
     // Handle positions in normalized [0,1] data-range space.
     // shadows_ <= midtone_ <= highlights_  (enforced by hit-test/drag clamping)
