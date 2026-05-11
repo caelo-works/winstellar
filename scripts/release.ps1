@@ -84,14 +84,16 @@ try {
 
     # --- 1. Bump --------------------------------------------------------------
     Step 1 "Bumping version"
-    $bumpArgs = @()
+    # Explicit per-arm dispatch -- PS5's splat handling of `& path @args` is
+    # finicky on this UNC repo layout (last release attempt failed here with
+    # a misleading "parameter -Set not recognized" against release.ps1).
+    $bumper = Join-Path $repoRoot 'scripts\bump_version.ps1'
     switch ($PSCmdlet.ParameterSetName) {
-        'Patch' { $bumpArgs = @('-Patch') }
-        'Minor' { $bumpArgs = @('-Minor') }
-        'Major' { $bumpArgs = @('-Major') }
-        'Set'   { $bumpArgs = @('-Set', $Set) }
+        'Patch' { & $bumper -Patch }
+        'Minor' { & $bumper -Minor }
+        'Major' { & $bumper -Major }
+        'Set'   { & $bumper -Set $Set }
     }
-    & (Join-Path $repoRoot 'scripts\bump_version.ps1') @bumpArgs
     if ($LASTEXITCODE -ne 0) { throw "bump_version.ps1 failed" }
 
     # Read the version that bump_version just wrote.
@@ -122,10 +124,19 @@ try {
 
     # --- 5. Installer ---------------------------------------------------------
     Step 5 "Build installer"
-    $installerArgs = @('-SkipBuild')   # we just built; don't rebuild
-    if ($SigningCert)  { $installerArgs += @('-SigningCert',  $SigningCert) }
-    if ($TimestampUrl) { $installerArgs += @('-TimestampUrl', $TimestampUrl) }
-    & (Join-Path $repoRoot 'installer\build_installer.ps1') @installerArgs
+    # Same explicit-args pattern as step 1 -- PS5 splat dropped these named
+    # arguments and PS treated the URL as a positional arg against
+    # release.ps1 itself, failing with PositionalParameterNotFound.
+    $installer = Join-Path $repoRoot 'installer\build_installer.ps1'
+    if     ($SigningCert -and $TimestampUrl) {
+        & $installer -SkipBuild -SigningCert $SigningCert -TimestampUrl $TimestampUrl
+    } elseif ($SigningCert) {
+        & $installer -SkipBuild -SigningCert $SigningCert
+    } elseif ($TimestampUrl) {
+        & $installer -SkipBuild -TimestampUrl $TimestampUrl
+    } else {
+        & $installer -SkipBuild
+    }
     if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
 
     # --- 6. Push (optional) ---------------------------------------------------
