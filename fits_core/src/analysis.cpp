@@ -138,107 +138,142 @@ double median_of(std::vector<double>& v) {
     return *m;
 }
 
+// Flat per-above-threshold-pixel record. Replaces the per-blob {xs, ys, vs}
+// vector-of-vectors so star detection allocates O(detected pixels) rather
+// than O(W*H + per-blob heap churn).
+struct PixelEntry {
+    int32_t x;
+    int32_t y;
+    float   v;
+    int32_t label;   // UF id at insert time; resolved in pass 2 below.
+};
+
 std::vector<StarInfo> detect_stars(const FitsImage& img,
                                     double background,
                                     double threshold_value) {
     const int W = img.width;
     const int H = img.height;
-    const size_t N = static_cast<size_t>(W) * static_cast<size_t>(H);
-    std::vector<int32_t> label(N, -1);
+    if (W <= 0 || H <= 0) return {};
+
+    // Pass 1: streaming connected-component labeling with a 2-row sliding
+    // window. Each above-threshold pixel is appended to `pixels` along with
+    // its (provisional) Union-Find id. The full-image label array (was 144 MB
+    // on a 36 Mpx image) is replaced by ~8-32 KB of row buffers.
+    std::vector<int32_t> prev_row(static_cast<size_t>(W), -1);
+    std::vector<int32_t> curr_row(static_cast<size_t>(W), -1);
     UnionFind uf;
-    uf.reserve(N / 32 + 16);
-
-    auto px = [&](int x, int y) -> float { return img.data[size_t(y) * W + x]; };
-
-    // First pass: assign labels with 8-connectivity, merging on the fly.
+    std::vector<PixelEntry> pixels;
+    // Loaders sanitize NaN/Inf so the threshold compare is the only branch.
     for (int y = 0; y < H; ++y) {
+        const float* row = img.data.data() + static_cast<size_t>(y) * static_cast<size_t>(W);
         for (int x = 0; x < W; ++x) {
-            const float v = px(x, y);
-            if (!std::isfinite(v) || v <= threshold_value) continue;
+            const float v = row[x];
+            if (v <= threshold_value) { curr_row[x] = -1; continue; }
 
+            // 8-connected: NW, N, NE in prev row; W in curr row.
             int32_t best = -1;
-            // neighbors already visited: NW, N, NE, W
-            const std::array<std::pair<int,int>, 4> nb = {{
-                {x-1, y-1}, {x, y-1}, {x+1, y-1}, {x-1, y}
-            }};
-            for (auto [nx, ny] : nb) {
-                if (nx < 0 || ny < 0 || nx >= W) continue;
-                const int32_t nl = label[size_t(ny) * W + nx];
-                if (nl < 0) continue;
+            auto consider = [&](int32_t nl) {
+                if (nl < 0) return;
                 if (best < 0) best = nl;
-                else uf.unite(best, nl);
-            }
-            label[size_t(y) * W + x] = (best >= 0) ? best : uf.make_set();
+                else if (best != nl) uf.unite(best, nl);
+            };
+            if (x > 0)       consider(prev_row[x - 1]);
+                              consider(prev_row[x    ]);
+            if (x + 1 < W)   consider(prev_row[x + 1]);
+            if (x > 0)       consider(curr_row[x - 1]);
+
+            if (best < 0) best = uf.make_set();
+            curr_row[x] = best;
+            pixels.push_back({ x, y, v, best });
         }
+        std::swap(prev_row, curr_row);
+        std::fill(curr_row.begin(), curr_row.end(), -1);
     }
 
-    // Resolve labels and gather per-root pixel lists.
-    struct Blob {
-        std::vector<int> xs;
-        std::vector<int> ys;
-        std::vector<float> vs;
-    };
-    std::vector<Blob> blobs(uf.parent.size());
-    for (int y = 0; y < H; ++y) {
-        for (int x = 0; x < W; ++x) {
-            const int32_t l = label[size_t(y) * W + x];
-            if (l < 0) continue;
-            const int32_t r = uf.find(l);
-            Blob& b = blobs[r];
-            b.xs.push_back(x);
-            b.ys.push_back(y);
-            b.vs.push_back(px(x, y));
-        }
-    }
+    if (pixels.empty()) return {};
 
-    // Free large arrays now that blobs are gathered.
-    label.clear();
-    label.shrink_to_fit();
-    uf.parent.clear();
-    uf.parent.shrink_to_fit();
+    // Pass 2: resolve UF roots in place.
+    for (auto& p : pixels) p.label = uf.find(p.label);
 
+    // Pass 3: count pixels per root, decide which blobs survive the
+    // [kMinPixels, kMaxPixels] filter, build offset-into-bucketed-array
+    // begins. Rejected blobs are marked with begin == -1 so the bucketing
+    // step below skips them without allocating per-blob heap entries.
     constexpr int kMinPixels = 4;
     constexpr int kMaxPixels = 200;
 
-    std::vector<StarInfo> stars;
-    stars.reserve(blobs.size() / 4);
+    const size_t n_labels = uf.parent.size();
+    std::vector<int32_t> counts(n_labels, 0);
+    for (const auto& p : pixels) ++counts[static_cast<size_t>(p.label)];
 
-    for (auto& b : blobs) {
-        const int n = static_cast<int>(b.xs.size());
-        if (n < kMinPixels || n > kMaxPixels) continue;
+    std::vector<int32_t> begin(n_labels, -1);
+    int32_t kept = 0;
+    for (size_t r = 0; r < n_labels; ++r) {
+        const int32_t c = counts[r];
+        if (c >= kMinPixels && c <= kMaxPixels) {
+            begin[r] = kept;
+            kept += c;
+        } else {
+            counts[r] = 0;   // hides the blob from the analyze pass
+        }
+    }
+    if (kept == 0) return {};
+
+    // Pass 4: bucket-sort pixels by their resolved root so each blob's
+    // pixels are contiguous. `cursor` walks the per-blob begin and is the
+    // counting-sort index pointer.
+    std::vector<PixelEntry> bucketed(static_cast<size_t>(kept));
+    std::vector<int32_t> cursor = begin;
+    for (const auto& p : pixels) {
+        const int32_t off = begin[static_cast<size_t>(p.label)];
+        if (off < 0) continue;
+        bucketed[static_cast<size_t>(cursor[static_cast<size_t>(p.label)]++)] = p;
+    }
+    // Free the unsorted scratch as early as possible.
+    std::vector<PixelEntry>().swap(pixels);
+    std::vector<int32_t>().swap(cursor);
+
+    // Pass 5: per-blob analysis. Each blob's pixels live in
+    // bucketed[begin[r] .. begin[r] + counts[r]).
+    std::vector<StarInfo> stars;
+    stars.reserve(static_cast<size_t>(kept) / 16);
+
+    for (size_t r = 0; r < n_labels; ++r) {
+        if (begin[r] < 0) continue;
+        PixelEntry* px = bucketed.data() + begin[r];
+        const int n = counts[r];
 
         // Background-subtracted intensities; reject any non-positive after
         // subtraction (can happen at the threshold edge).
         double flux = 0.0;
         for (int i = 0; i < n; ++i) {
-            const double iv = static_cast<double>(b.vs[i]) - background;
-            if (iv <= 0.0) { b.vs[i] = 0.0f; }
-            else { b.vs[i] = static_cast<float>(iv); flux += iv; }
+            const double iv = static_cast<double>(px[i].v) - background;
+            if (iv <= 0.0) { px[i].v = 0.0f; }
+            else           { px[i].v = static_cast<float>(iv); flux += iv; }
         }
         if (flux <= 0.0) continue;
 
         // Flux-weighted centroid.
         double cx = 0.0, cy = 0.0;
         for (int i = 0; i < n; ++i) {
-            cx += b.xs[i] * b.vs[i];
-            cy += b.ys[i] * b.vs[i];
+            cx += px[i].x * px[i].v;
+            cy += px[i].y * px[i].v;
         }
         cx /= flux;
         cy /= flux;
 
-        // Second moments around centroid (flux-weighted).
+        // Second moments around centroid.
         double Mxx = 0.0, Myy = 0.0, Mxy = 0.0;
         for (int i = 0; i < n; ++i) {
-            const double dx = b.xs[i] - cx;
-            const double dy = b.ys[i] - cy;
-            const double w = b.vs[i];
+            const double dx = px[i].x - cx;
+            const double dy = px[i].y - cy;
+            const double w  = px[i].v;
             Mxx += w * dx * dx;
             Myy += w * dy * dy;
             Mxy += w * dx * dy;
         }
         Mxx /= flux; Myy /= flux; Mxy /= flux;
 
-        // FWHM and eccentricity from the moment ellipse eigenvalues.
         const double tr = (Mxx + Myy) * 0.5;
         const double dt = std::sqrt(std::max(0.0,
             (Mxx - Myy) * (Mxx - Myy) * 0.25 + Mxy * Mxy));
@@ -246,23 +281,22 @@ std::vector<StarInfo> detect_stars(const FitsImage& img,
         const double l_min = std::max(0.0, tr - dt);
         if (l_max <= 0.0) continue;
         const double sigma = std::sqrt((l_max + l_min) * 0.5);
-        const double fwhm = 2.3548200450309493 * sigma;
-        const double ecc = (l_max > 0.0)
-            ? std::sqrt(std::max(0.0, 1.0 - l_min / l_max)) : 0.0;
+        const double fwhm  = 2.3548200450309493 * sigma;
+        const double ecc   = std::sqrt(std::max(0.0, 1.0 - l_min / l_max));
 
         // HFR: sort blob pixels by distance from centroid, walk cumulative
         // flux and interpolate between the two pixels straddling 50%.
         struct RP { double r; double w; };
-        std::vector<RP> rp(n);
+        std::vector<RP> rp(static_cast<size_t>(n));
         for (int i = 0; i < n; ++i) {
-            const double dx = b.xs[i] - cx;
-            const double dy = b.ys[i] - cy;
-            rp[i] = { std::sqrt(dx*dx + dy*dy), static_cast<double>(b.vs[i]) };
+            const double dx = px[i].x - cx;
+            const double dy = px[i].y - cy;
+            rp[i] = { std::sqrt(dx*dx + dy*dy), static_cast<double>(px[i].v) };
         }
         std::sort(rp.begin(), rp.end(),
                   [](const RP& a, const RP& c) { return a.r < c.r; });
         double cumul = 0.0;
-        double hfr = 0.0;
+        double hfr   = 0.0;
         const double half = flux * 0.5;
         for (int i = 0; i < n; ++i) {
             const double next = cumul + rp[i].w;
