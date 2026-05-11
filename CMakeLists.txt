@@ -77,3 +77,12 @@ add_subdirectory(fits_core)
 add_subdirectory(shell_ext)
 add_subdirectory(viewer)
 add_subdirectory(tools)
+
+# Tests live in tests/ and are opt-in via the cache variable so external
+# consumers can disable them. CTest is enabled here so gtest_discover_tests
+# can register each TEST individually with the test runner.
+option(WINSTELLAR_BUILD_TESTS "Build the WinStellar test suite" ON)
+if(WINSTELLAR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

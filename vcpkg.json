@@ -10,6 +10,7 @@
             "features": ["pthreads"]
         },
         "sqlite3",
-        "pugixml"
+        "pugixml",
+        "gtest"
     ]
 }

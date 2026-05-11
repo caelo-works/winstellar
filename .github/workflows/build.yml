@@ -47,7 +47,8 @@ jobs:
         run: |
           $required = @(
             'WinStellar.exe', 'WinStellarShellExt.dll', 'FitsProps.propdesc',
-            'cfitsio.dll', 'sqlite3.dll', 'pugixml.dll', 'z.dll'
+            'cfitsio.dll', 'sqlite3.dll', 'pugixml.dll', 'z.dll',
+            'pthreadVC3.dll'
           )
           foreach ($f in $required) {
             $p = "build/bin/Release/$f"
@@ -56,6 +57,14 @@ jobs:
             }
             Write-Host "  $f"
           }
+
+      - name: Run tests (ctest)
+        shell: pwsh
+        # gtest_discover_tests registers each TEST individually, so a single
+        # failing case fails the job with a precise file:line, and the summary
+        # shows pass/fail counts per binary.
+        working-directory: build
+        run: ctest -C Release --output-on-failure --label-regex winstellar
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
@@ -69,6 +78,7 @@ jobs:
             build/bin/Release/sqlite3.dll
             build/bin/Release/pugixml.dll
             build/bin/Release/z.dll
+            build/bin/Release/pthreadVC3.dll
           if-no-files-found: error
           retention-days: 14
 

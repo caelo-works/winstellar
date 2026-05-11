@@ -47,6 +47,12 @@ constexpr const char* kUpsertSql =
     " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17);";
 
 std::wstring resolve_db_path() {
+    // Test/CI override: WINSTELLAR_CACHE_DB lets the test suite point the
+    // singleton at a per-test scratch file so it never touches the user's
+    // real %LOCALAPPDATA%\WinStellar\analysis_cache.db.
+    if (const wchar_t* override_ = _wgetenv(L"WINSTELLAR_CACHE_DB"); override_ && *override_) {
+        return override_;
+    }
     const wchar_t* la = _wgetenv(L"LOCALAPPDATA");
     if (!la || !*la) return {};
     std::wstring dir = std::wstring(la) + L"\\WinStellar";
