@@ -4,6 +4,7 @@ add_executable(WinStellar WIN32
     src/HeaderView.cpp
     src/AnalysisView.cpp
     src/Toolbar.cpp
+    src/Histogram.cpp
     src/viewer.rc
 )
 

@@ -189,9 +189,12 @@ constexpr int kCmd_StretchNone    = 109;
 constexpr int kCmd_StretchAuto    = 110;
 constexpr int kCmd_PrevFile       = 111;
 constexpr int kCmd_NextFile       = 112;
+constexpr int kCmd_ToggleHistogram= 113;
 
 // Worker → UI postback. wParam = generation, lParam = ViewerWindow::LoadResult*.
-constexpr UINT  WM_APP_LOAD_DONE = WM_APP + 1;
+constexpr UINT  WM_APP_LOAD_DONE   = WM_APP + 1;
+// Render worker → UI postback. lParam = ViewerWindow::RenderResult*.
+constexpr UINT  WM_APP_RENDER_DONE = WM_APP + 2;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -299,6 +302,21 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     toolbar_.set_stretch_none_active(false);
     toolbar_.set_nav_enabled(false);         // no file yet → Prev/Next greyed
 
+    histogram_.create(hwnd_, hinst);
+    histogram_.set_on_changed([this](const fitsx::StretchParams& p) {
+        apply_custom_stretch(p);
+    });
+    histogram_.set_on_auto([this]() {
+        stretch_mode_ = StretchMode::Auto;
+        apply_stretch();
+    });
+    histogram_.set_on_raw([this]() {
+        stretch_mode_ = StretchMode::None;
+        apply_stretch();
+    });
+
+    render_thread_ = std::thread([this] { render_worker_main(); });
+
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
     apply_dark_listview(analysis_.hwnd());
@@ -325,6 +343,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
         {FVIRTKEY,                       VK_RIGHT,    kCmd_NextFile},
         {FVIRTKEY,                       VK_PRIOR,    kCmd_PrevFile},
         {FVIRTKEY,                       VK_NEXT,     kCmd_NextFile},
+        {FCONTROL | FVIRTKEY,            'H',         kCmd_ToggleHistogram},
     };
     accel_ = ::CreateAcceleratorTableW(accel_entries, _countof(accel_entries));
 
@@ -344,6 +363,16 @@ int ViewerWindow::run_message_loop() {
         ::DispatchMessageW(&msg);
     }
     if (accel_) { ::DestroyAcceleratorTable(accel_); accel_ = nullptr; }
+
+    // Shut the render worker down before tearing down anything it might touch.
+    {
+        std::lock_guard<std::mutex> lk(render_mtx_);
+        render_quit_ = true;
+    }
+    render_cv_.notify_all();
+    if (render_thread_.joinable()) render_thread_.join();
+
+    histogram_.destroy();
     release_render_target();
     safe_release(d2d_factory_);
     return static_cast<int>(msg.wParam);
@@ -419,6 +448,9 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_APP_LOAD_DONE:
             self->on_load_finished(static_cast<std::uint64_t>(wp),
                                    reinterpret_cast<LoadResult*>(lp));
+            return 0;
+        case WM_APP_RENDER_DONE:
+            self->on_render_finished(0, reinterpret_cast<RenderResult*>(lp));
             return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
@@ -500,12 +532,26 @@ void ViewerWindow::update_title() {
 }
 
 void ViewerWindow::apply_stretch() {
-    if (image_.data.empty()) return;
+    if (!image_ || image_->data.empty()) return;
     stretch_ = (stretch_mode_ == StretchMode::Auto)
-        ? fitsx::compute_auto_stretch(image_)
+        ? fitsx::compute_auto_stretch(*image_)
         : fitsx::StretchParams{};   // identity = no stretch
-    rendered_ = fitsx::render_to_bgra(image_, stretch_);
-    safe_release(bitmap_);
+    histogram_.set_params(stretch_);
+    refresh_stretch_toolbar();
+    request_render(stretch_);
+}
+
+void ViewerWindow::apply_custom_stretch(const fitsx::StretchParams& p) {
+    if (!image_) return;
+    stretch_      = p;
+    stretch_mode_ = StretchMode::Custom;
+    refresh_stretch_toolbar();
+    request_render(stretch_);
+}
+
+void ViewerWindow::refresh_stretch_toolbar() {
+    toolbar_.set_stretch_auto_active(stretch_mode_ == StretchMode::Auto);
+    toolbar_.set_stretch_none_active(stretch_mode_ == StretchMode::None);
 }
 
 // Heap-allocated bundle passed from the worker thread back to the UI thread
@@ -520,6 +566,63 @@ struct ViewerWindow::LoadResult {
     fitsx::RenderedBitmap rendered;
     fitsx::AnalysisResult analysis;
 };
+
+// Posted from the render worker for each completed re-stretch (no analysis,
+// no disk I/O; just render_to_bgra on the current image_).
+struct ViewerWindow::RenderResult {
+    std::uint64_t         gen = 0;
+    fitsx::RenderedBitmap rendered;
+};
+
+void ViewerWindow::render_worker_main() {
+    for (;;) {
+        std::shared_ptr<const fitsx::FitsImage> img;
+        fitsx::StretchParams                    p;
+        std::uint64_t                           gen = 0;
+
+        {
+            std::unique_lock<std::mutex> lk(render_mtx_);
+            render_cv_.wait(lk, [this] { return render_quit_ || render_pending_; });
+            if (render_quit_) return;
+            img            = render_img_;
+            p              = render_params_;
+            gen            = render_gen_pending_;
+            render_pending_ = false;
+        }
+
+        if (!img || img->data.empty()) continue;
+        auto* out = new RenderResult{};
+        out->gen      = gen;
+        out->rendered = fitsx::render_to_bgra(*img, p);
+        ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
+                       reinterpret_cast<LPARAM>(out));
+    }
+}
+
+void ViewerWindow::request_render(const fitsx::StretchParams& p) {
+    if (!image_) return;
+    const std::uint64_t gen = render_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lk(render_mtx_);
+        render_img_         = image_;
+        render_params_      = p;
+        render_gen_pending_ = gen;
+        render_pending_     = true;
+    }
+    render_cv_.notify_one();
+}
+
+void ViewerWindow::on_render_finished(std::uint64_t /*unused*/, RenderResult* raw) {
+    std::unique_ptr<RenderResult> r(raw);
+    // Drop stale renders — only the last-requested params should win.
+    if (r->gen != render_gen_latest_.load(std::memory_order_relaxed)) return;
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+
+    rendered_ = std::move(r->rendered);
+    safe_release(bitmap_);
+    // No zoom/offset reset — params change shouldn't disturb the user's pan.
+    invalidate_viewport();
+}
 
 void ViewerWindow::load_file(const wchar_t* path) {
     if (!path || !*path) return;
@@ -597,15 +700,17 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
         return;
     }
 
-    image_       = std::move(r->image);
+    image_       = std::make_shared<const fitsx::FitsImage>(std::move(r->image));
     stretch_     = r->stretch;
     rendered_    = std::move(r->rendered);
     loaded_path_ = std::move(r->path);
     // Bitmap was created from the old rendered_ buffer — rebuild on next render.
     safe_release(bitmap_);
 
-    headers_.update(image_.headers);
+    headers_.update(image_->headers);
     analysis_.update(r->analysis);
+    histogram_.set_image(image_.get());
+    histogram_.set_params(stretch_);
 
     zoom_to_fit();
     update_title();
@@ -969,19 +1074,19 @@ void ViewerWindow::on_command(int id) {
         }
         case kCmd_StretchNone: {
             stretch_mode_ = StretchMode::None;
-            toolbar_.set_stretch_none_active(true);
-            toolbar_.set_stretch_auto_active(false);
             apply_stretch();
-            invalidate_viewport();
             ::SetFocus(hwnd_);
             break;
         }
         case kCmd_StretchAuto: {
             stretch_mode_ = StretchMode::Auto;
-            toolbar_.set_stretch_auto_active(true);
-            toolbar_.set_stretch_none_active(false);
             apply_stretch();
-            invalidate_viewport();
+            ::SetFocus(hwnd_);
+            break;
+        }
+        case kCmd_ToggleHistogram: {
+            histogram_.toggle();
+            toolbar_.set_histogram_active(histogram_.is_visible());
             ::SetFocus(hwnd_);
             break;
         }

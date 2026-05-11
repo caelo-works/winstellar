@@ -5,8 +5,12 @@
 #include <d2d1.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "fits_core/fits_image.h"
 #include "fits_core/fits_render.h"
@@ -15,6 +19,7 @@
 #include "HeaderView.h"
 #include "AnalysisView.h"
 #include "Toolbar.h"
+#include "Histogram.h"
 
 class ViewerWindow {
 public:
@@ -69,21 +74,30 @@ private:
     AnalysisView analysis_;
     HeaderView headers_;
     Toolbar toolbar_;
+    HistogramWindow histogram_;
 
     ID2D1Factory* d2d_factory_ = nullptr;
     ID2D1HwndRenderTarget* rt_ = nullptr;
     ID2D1Bitmap* bitmap_ = nullptr;
 
-    fitsx::FitsImage image_;
-    fitsx::StretchParams stretch_;
+    // shared_ptr so an in-flight render worker can keep using the previous
+    // image safely when the user navigates to the next file mid-render.
+    std::shared_ptr<const fitsx::FitsImage> image_;
+    fitsx::StretchParams  stretch_;
     fitsx::RenderedBitmap rendered_;
     std::wstring loaded_path_;
 
-    enum class StretchMode { Auto, None };
+    enum class StretchMode { Auto, None, Custom };
     StretchMode stretch_mode_ = StretchMode::Auto;
     int rotation_deg_ = 0;  // 0 / 90 / 180 / 270 — clockwise
 
-    void apply_stretch();   // recompute params for current mode + re-render bitmap
+    // Recompute params for the current mode + kick an async re-render. Reads
+    // image_; safe no-op when nothing is loaded.
+    void apply_stretch();
+    // Apply caller-provided params (e.g. from histogram sliders) and async-render.
+    void apply_custom_stretch(const fitsx::StretchParams& p);
+    // Reflect current mode/params on the toolbar's RAW/Auto check states.
+    void refresh_stretch_toolbar();
 
     float zoom_ = 1.0f;
     float offset_x_ = 0.0f;
@@ -100,4 +114,23 @@ private:
     std::atomic<std::uint64_t> load_gen_{0};
     bool          loading_         = false;
     std::wstring  loading_filename_;   // shown under the spinner
+
+    // Dedicated render worker — one thread, one item in flight, coalesces
+    // bursts of slider drags into "render the latest params only".
+    // Lifecycle: started in create(), stopped in run_message_loop() teardown.
+    void render_worker_main();
+    void request_render(const fitsx::StretchParams& p);
+
+    struct RenderResult;
+    void on_render_finished(std::uint64_t gen, RenderResult* r);
+
+    std::thread             render_thread_;
+    std::mutex              render_mtx_;
+    std::condition_variable render_cv_;
+    bool                    render_quit_   = false;
+    bool                    render_pending_= false;
+    std::shared_ptr<const fitsx::FitsImage> render_img_;
+    fitsx::StretchParams    render_params_{};
+    std::uint64_t           render_gen_pending_ = 0;   // bumps on each request
+    std::atomic<std::uint64_t> render_gen_latest_{0};  // mirror visible to UI
 };

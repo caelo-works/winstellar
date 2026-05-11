@@ -20,6 +20,7 @@ constexpr int kCmd_StretchNone    = 109;
 constexpr int kCmd_StretchAuto    = 110;
 constexpr int kCmd_PrevFile       = 111;
 constexpr int kCmd_NextFile       = 112;
+constexpr int kCmd_ToggleHistogram= 113;
 
 constexpr int kButtonW = 44;
 constexpr int kButtonH = 44;  // matches Toolbar::kHeight so buttons fill the bar
@@ -77,6 +78,7 @@ constexpr ButtonSpec kButtons[] = {
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_StretchNone,     L"RAW",    L"No stretch (linear, 0..max)",      true,  true },
     { kCmd_StretchAuto,     L"Auto",   L"Auto stretch (PixInsight AutoSTF)", true, true },
+    { kCmd_ToggleHistogram, L"\xE9D9", L"Histogram + stretch sliders (Ctrl+H)", false, true },
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_ToggleAnalysis,  L"\xE9F9", L"Show / hide measurements (A)",     false, true },
     { kCmd_ToggleHeaders,   L"\xE946", L"Show / hide FITS headers (H)",     false, true },
@@ -179,6 +181,11 @@ void Toolbar::set_stretch_auto_active(bool on) {
 void Toolbar::set_stretch_none_active(bool on) {
     if (!hwnd_) return;
     ::SendMessageW(hwnd_, TB_CHECKBUTTON, kCmd_StretchNone, MAKELPARAM(on ? TRUE : FALSE, 0));
+}
+
+void Toolbar::set_histogram_active(bool on) {
+    if (!hwnd_) return;
+    ::SendMessageW(hwnd_, TB_CHECKBUTTON, kCmd_ToggleHistogram, MAKELPARAM(on ? TRUE : FALSE, 0));
 }
 
 void Toolbar::set_nav_enabled(bool enabled) {
