@@ -113,29 +113,43 @@ private:
     float drag_start_off_x_ = 0.0f;
     float drag_start_off_y_ = 0.0f;
 
-    // Async-load state. load_gen_ bumps for every begin_load() so workers
-    // can tell whether their result is still wanted. loading_ drives the
-    // spinner overlay + Prev/Next gating.
-    std::atomic<std::uint64_t> load_gen_{0};
+    // loading_ drives the spinner overlay + Prev/Next gating.
     bool          loading_         = false;
     std::wstring  loading_filename_;   // shown under the spinner
 
-    // Dedicated render worker — one thread, one item in flight, coalesces
-    // bursts of slider drags into "render the latest params only".
-    // Lifecycle: started in create(), stopped in run_message_loop() teardown.
-    void render_worker_main();
+    // Unified async worker -- one persistent thread, one slot per work
+    // type (load + render), latest-wins. Eliminates the per-load
+    // std::thread(...).detach() pattern that risked leaking unprocessed
+    // LoadResult on shutdown when the user closed mid-load.
+    //
+    // Load takes priority over render: a fresh navigation against a new
+    // file always supersedes a pending re-stretch of the previous one.
+    void worker_main();
+    void request_load (const std::wstring& path);
     void request_render(const fitsx::StretchParams& p);
 
     struct RenderResult;
     void on_render_finished(std::uint64_t gen, RenderResult* r);
 
-    std::thread             render_thread_;
-    std::mutex              render_mtx_;
-    std::condition_variable render_cv_;
-    bool                    render_quit_   = false;
-    bool                    render_pending_= false;
-    std::shared_ptr<const fitsx::FitsImage> render_img_;
-    fitsx::StretchParams    render_params_{};
-    std::uint64_t           render_gen_pending_ = 0;   // bumps on each request
-    std::atomic<std::uint64_t> render_gen_latest_{0};  // mirror visible to UI
+    std::thread             worker_thread_;
+    std::mutex              worker_mtx_;
+    std::condition_variable worker_cv_;
+    bool                    worker_quit_ = false;
+
+    // load slot
+    bool                                       pending_load_       = false;
+    std::wstring                               pending_load_path_;
+    std::uint64_t                              pending_load_gen_   = 0;
+    StretchMode                                pending_load_mode_  = StretchMode::Auto;
+
+    // render slot
+    bool                                       pending_render_         = false;
+    std::shared_ptr<const fitsx::FitsImage>    pending_render_img_;
+    fitsx::StretchParams                       pending_render_params_{};
+    std::uint64_t                              pending_render_gen_     = 0;
+
+    // UI-visible atomic mirrors -- on_*_finished compares the result's gen
+    // against the latest to drop stale results.
+    std::atomic<std::uint64_t> load_gen_latest_  {0};
+    std::atomic<std::uint64_t> render_gen_latest_{0};
 };

@@ -315,7 +315,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
         apply_stretch();
     });
 
-    render_thread_ = std::thread([this] { render_worker_main(); });
+    worker_thread_ = std::thread([this] { worker_main(); });
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -366,11 +366,11 @@ int ViewerWindow::run_message_loop() {
 
     // Shut the render worker down before tearing down anything it might touch.
     {
-        std::lock_guard<std::mutex> lk(render_mtx_);
-        render_quit_ = true;
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        worker_quit_ = true;
     }
-    render_cv_.notify_all();
-    if (render_thread_.joinable()) render_thread_.join();
+    worker_cv_.notify_all();
+    if (worker_thread_.joinable()) worker_thread_.join();
 
     histogram_.destroy();
     release_render_target();
@@ -581,62 +581,133 @@ struct ViewerWindow::RenderResult {
     fitsx::RenderedBitmap rendered;
 };
 
-void ViewerWindow::render_worker_main() {
+// Unified worker. Sleeps on worker_cv_, wakes when pending_load_ or
+// pending_render_ is set (or on shutdown via worker_quit_). Load takes
+// priority over render so a file switch always supersedes a slider drag
+// on the previous file.
+void ViewerWindow::worker_main() {
     for (;;) {
-        std::shared_ptr<const fitsx::FitsImage> img;
-        fitsx::StretchParams                    p;
-        std::uint64_t                           gen = 0;
+        bool do_load = false, do_render = false;
+        std::wstring                                 load_path;
+        StretchMode                                  load_mode = StretchMode::Auto;
+        std::uint64_t                                load_gen = 0;
+        std::shared_ptr<const fitsx::FitsImage>      render_img;
+        fitsx::StretchParams                         render_params{};
+        std::uint64_t                                render_gen = 0;
 
         {
-            std::unique_lock<std::mutex> lk(render_mtx_);
-            render_cv_.wait(lk, [this] { return render_quit_ || render_pending_; });
-            if (render_quit_) return;
-            img            = render_img_;
-            p              = render_params_;
-            gen            = render_gen_pending_;
-            render_pending_ = false;
+            std::unique_lock<std::mutex> lk(worker_mtx_);
+            worker_cv_.wait(lk, [this] {
+                return worker_quit_ || pending_load_ || pending_render_;
+            });
+            if (worker_quit_) return;
+            if (pending_load_) {
+                do_load           = true;
+                load_path         = std::move(pending_load_path_);
+                load_mode         = pending_load_mode_;
+                load_gen          = pending_load_gen_;
+                pending_load_     = false;
+                pending_load_path_.clear();
+            } else if (pending_render_) {
+                do_render         = true;
+                render_img        = pending_render_img_;
+                render_params     = pending_render_params_;
+                render_gen        = pending_render_gen_;
+                pending_render_   = false;
+                pending_render_img_.reset();
+            }
         }
 
-        if (!img || img->data.empty()) continue;
-        auto* out = new RenderResult{};
-        out->gen      = gen;
-        out->rendered = fitsx::render_to_bgra(*img, p);
-        ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
-                       reinterpret_cast<LPARAM>(out));
+        if (do_load) {
+            auto result = std::make_unique<LoadResult>();
+            result->path = load_path;
+
+            auto loaded = fitsx::load_from_file(load_path.c_str());
+            if (!loaded.success) {
+                result->success = false;
+                result->error   = std::move(loaded.error);
+                ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
+                               static_cast<WPARAM>(load_gen),
+                               reinterpret_cast<LPARAM>(result.release()));
+                continue;
+            }
+            result->image = std::move(loaded.image);
+            // Compute auto-stretch once and stash it on the image so the UI
+            // thread's RAW <-> Auto toggle is instant.
+            const fitsx::StretchParams auto_p = fitsx::compute_auto_stretch(result->image);
+            result->image.auto_stretch = auto_p;
+            result->stretch  = (load_mode == StretchMode::Auto) ? auto_p
+                                                                : fitsx::StretchParams{};
+            result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
+
+            const std::string ckey = fitsx::compute_cache_key_from_file(load_path.c_str());
+            if (!ckey.empty()) {
+                if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
+                    result->analysis = *cached;
+                } else {
+                    result->analysis = fitsx::run_analysis(result->image);
+                    fitsx::AnalysisCache::instance().store(ckey, result->analysis);
+                }
+            } else {
+                result->analysis = fitsx::run_analysis(result->image);
+            }
+            result->success = true;
+
+            ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
+                           static_cast<WPARAM>(load_gen),
+                           reinterpret_cast<LPARAM>(result.release()));
+        } else if (do_render) {
+            if (!render_img || render_img->data.empty()) continue;
+            auto* out = new RenderResult{};
+            out->gen      = render_gen;
+            out->rendered = fitsx::render_to_bgra(*render_img, render_params);
+            ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
+                           reinterpret_cast<LPARAM>(out));
+        }
     }
+}
+
+void ViewerWindow::request_load(const std::wstring& path) {
+    const std::uint64_t gen = load_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        pending_load_      = true;
+        pending_load_path_ = path;
+        pending_load_gen_  = gen;
+        pending_load_mode_ = stretch_mode_;
+    }
+    worker_cv_.notify_one();
 }
 
 void ViewerWindow::request_render(const fitsx::StretchParams& p) {
     if (!image_) return;
     const std::uint64_t gen = render_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
     {
-        std::lock_guard<std::mutex> lk(render_mtx_);
-        render_img_         = image_;
-        render_params_      = p;
-        render_gen_pending_ = gen;
-        render_pending_     = true;
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        pending_render_        = true;
+        pending_render_img_    = image_;
+        pending_render_params_ = p;
+        pending_render_gen_    = gen;
     }
-    render_cv_.notify_one();
+    worker_cv_.notify_one();
 }
 
 void ViewerWindow::on_render_finished(std::uint64_t /*unused*/, RenderResult* raw) {
     std::unique_ptr<RenderResult> r(raw);
-    // Drop stale renders — only the last-requested params should win.
+    // Drop stale renders -- only the last-requested params should win.
     if (r->gen != render_gen_latest_.load(std::memory_order_relaxed)) return;
     if (!hwnd_ || !::IsWindow(hwnd_)) return;
 
     rendered_ = std::move(r->rendered);
     safe_release(bitmap_);
-    // No zoom/offset reset — params change shouldn't disturb the user's pan.
+    // No zoom/offset reset -- params change shouldn't disturb the user's pan.
     invalidate_viewport();
 }
 
 void ViewerWindow::load_file(const wchar_t* path) {
     if (!path || !*path) return;
 
-    const std::uint64_t gen = load_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-    // Show the spinner immediately — the worker may take seconds for big XISFs.
+    // Show the spinner immediately -- the worker may take seconds for big XISFs.
     loading_ = true;
     if (const wchar_t* name = ::PathFindFileNameW(path)) {
         loading_filename_ = name;
@@ -646,57 +717,13 @@ void ViewerWindow::load_file(const wchar_t* path) {
     ::SetTimer(hwnd_, kTimerSpinner, 16, nullptr);
     invalidate_viewport();
 
-    const HWND        hwnd_target = hwnd_;
-    const std::wstring path_copy(path);
-    const StretchMode mode = stretch_mode_;
-
-    std::thread([hwnd_target, gen, path_copy, mode]() {
-        auto result = std::make_unique<LoadResult>();
-        result->path = path_copy;
-
-        auto loaded = fitsx::load_from_file(path_copy.c_str());
-        if (!loaded.success) {
-            result->success = false;
-            result->error   = std::move(loaded.error);
-            ::PostMessageW(hwnd_target, WM_APP_LOAD_DONE,
-                           static_cast<WPARAM>(gen),
-                           reinterpret_cast<LPARAM>(result.release()));
-            return;
-        }
-        result->image   = std::move(loaded.image);
-        // Compute auto-stretch once on the worker and stash it on the image
-        // so the UI thread's RAW <-> Auto toggle is instant (the toolbar
-        // Auto button used to recompute the stretch on the UI thread,
-        // stalling ~200 ms on 36 Mpx).
-        const fitsx::StretchParams auto_p = fitsx::compute_auto_stretch(result->image);
-        result->image.auto_stretch = auto_p;
-        result->stretch  = (mode == StretchMode::Auto) ? auto_p
-                                                       : fitsx::StretchParams{};
-        result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
-
-        const std::string ckey = fitsx::compute_cache_key_from_file(path_copy.c_str());
-        if (!ckey.empty()) {
-            if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
-                result->analysis = *cached;
-            } else {
-                result->analysis = fitsx::run_analysis(result->image);
-                fitsx::AnalysisCache::instance().store(ckey, result->analysis);
-            }
-        } else {
-            result->analysis = fitsx::run_analysis(result->image);
-        }
-        result->success = true;
-
-        ::PostMessageW(hwnd_target, WM_APP_LOAD_DONE,
-                       static_cast<WPARAM>(gen),
-                       reinterpret_cast<LPARAM>(result.release()));
-    }).detach();
+    request_load(std::wstring(path));
 }
 
 void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     std::unique_ptr<LoadResult> r(raw);
     // Drop stale results (user spammed Prev/Next while a slow load was in flight).
-    if (gen != load_gen_.load(std::memory_order_relaxed)) return;
+    if (gen != load_gen_latest_.load(std::memory_order_relaxed)) return;
     // Window may already be tearing down — PostMessage races with WM_DESTROY.
     if (!hwnd_ || !::IsWindow(hwnd_)) return;
 
