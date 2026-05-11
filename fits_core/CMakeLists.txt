@@ -27,3 +27,7 @@ set_target_properties(fits_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
 )
+if(WINSTELLAR_IPO_OK)
+    set_property(TARGET fits_core
+                 PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+endif()

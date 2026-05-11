@@ -32,6 +32,10 @@ set_target_properties(WinStellarShellExt PROPERTIES
     PREFIX ""
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
 )
+if(WINSTELLAR_IPO_OK)
+    set_property(TARGET WinStellarShellExt
+                 PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+endif()
 
 # Always-run custom target that stages FitsProps.propdesc next to the DLL.
 # We use add_custom_target ALL (not add_custom_command POST_BUILD on the DLL)

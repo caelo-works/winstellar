@@ -36,6 +36,10 @@ set_target_properties(WinStellar PROPERTIES
     OUTPUT_NAME "WinStellar"
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
 )
+if(WINSTELLAR_IPO_OK)
+    set_property(TARGET WinStellar
+                 PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+endif()
 
 # Our viewer.rc embeds a manifest (DPI-aware, common-controls v6). Stop the
 # linker from also auto-generating one, which would fail with CVT1100 on

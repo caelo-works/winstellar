@@ -65,6 +65,22 @@ if(MSVC)
         NOMINMAX
         _CRT_SECURE_NO_WARNINGS
     )
+    # Release-only optimizations: AVX2 (Windows 11 minimum CPU has it),
+    # function-level linking (/Gy default-on under /O2 -- safe to keep
+    # explicit), data COMDAT folding (/Gw, helps the linker eliminate dead
+    # globals / strings).
+    add_compile_options($<$<CONFIG:Release>:/arch:AVX2>)
+    add_compile_options($<$<CONFIG:Release>:/Gw>)
+endif()
+
+# Link-time code generation for Release. cfitsio / sqlite3 ship as static
+# libs from vcpkg without LTCG bitcode, so we restrict IPO to our own
+# targets (it's per-target rather than global). Skip if the compiler
+# doesn't report IPO support.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT WINSTELLAR_IPO_OK OUTPUT _ipo_err)
+if(NOT WINSTELLAR_IPO_OK)
+    message(STATUS "IPO/LTCG unavailable: ${_ipo_err}")
 endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
