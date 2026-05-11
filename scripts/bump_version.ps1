@@ -48,9 +48,13 @@ switch ($PSCmdlet.ParameterSetName) {
 }
 $next = "$maj.$min.$pat"
 
+# Use ${1} not $1 in the replacement: bare $1 followed by a digit (e.g. $next
+# = "0.2.0") gets parsed by .NET regex as "$10" — group 10 doesn't exist, so
+# the backref silently drops the captured prefix and you end up with
+# `project($10.2.0)` instead of `project(WinStellar VERSION 0.2.0 ...)`.
 $newText = [regex]::Replace($text,
     'project\(([^)]*VERSION\s+)\d+\.\d+\.\d+',
-    "project(`$1$next")
+    "project(`${1}$next")
 Set-Content -Path $cmake -Value $newText -NoNewline
 
 # Also sync vcpkg.json's version-string so the manifest stays consistent.

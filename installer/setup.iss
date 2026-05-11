@@ -80,6 +80,8 @@ Source: "{#BuildDir}\cfitsio.dll";        DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\sqlite3.dll";        DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
 Source: "{#BuildDir}\pugixml.dll";        DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
 Source: "{#BuildDir}\z.dll";              DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
+; pthreads-win32 is a transitive dep of cfitsio (REENTRANT build for thread-safe loads)
+Source: "{#BuildDir}\pthreadVC3.dll";     DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
 
 [Icons]
 Name: "{group}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"
