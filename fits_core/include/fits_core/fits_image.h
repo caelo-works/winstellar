@@ -41,9 +41,21 @@ struct FitsImage {
     int height = 0;
     PixelType source_type = PixelType::Unknown;
 
-    // Pixel data, row-major, top-to-bottom (FITS-native order is bottom-to-top;
-    // the loader flips to top-down to match Windows BITMAP / Direct2D convention).
+    // Mono or R-channel pixel data, row-major, top-to-bottom (FITS-native
+    // order is bottom-to-top; the loader flips to top-down to match Windows
+    // BITMAP / Direct2D convention).
     std::vector<float> data;
+
+    // Optional G and B planes for RGB images. Both empty for mono; both
+    // the same size as `data` for color. The renderer composites BGRA
+    // pixels only when both are present; auto-stretch and analysis stay
+    // luminance-based (channel 0) for v1.
+    std::vector<float> data_g;
+    std::vector<float> data_b;
+
+    [[nodiscard]] bool is_rgb() const noexcept {
+        return !data_g.empty() && !data_b.empty();
+    }
 
     // Original min/max in source units, for header display and inversion.
     double source_min = 0.0;

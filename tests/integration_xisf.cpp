@@ -42,6 +42,31 @@ TEST(XisfHeader, FailsOnTruncatedHeader) {
     EXPECT_FALSE(pr.success);
 }
 
+TEST(XisfLoad, LoadsThreeRgbPlanes) {
+    // 2x2 RGB image: each plane gets a distinguishing constant value.
+    const int W = 2, H = 2;
+    std::vector<float> r(W * H,  100.0f);
+    std::vector<float> g(W * H,  500.0f);
+    std::vector<float> b(W * H, 1000.0f);
+    auto buf = wst::make_synth_xisf_rgb(W, H, r, g, b);
+    ASSERT_FALSE(buf.empty());
+
+    auto res = load_xisf_from_memory(buf.data(), buf.size());
+    ASSERT_TRUE(res.success) << res.error;
+    EXPECT_TRUE(res.image.is_rgb());
+    EXPECT_EQ(res.image.data.size(),   4u);
+    EXPECT_EQ(res.image.data_g.size(), 4u);
+    EXPECT_EQ(res.image.data_b.size(), 4u);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_FLOAT_EQ(res.image.data[i],    100.0f);
+        EXPECT_FLOAT_EQ(res.image.data_g[i],  500.0f);
+        EXPECT_FLOAT_EQ(res.image.data_b[i], 1000.0f);
+    }
+    // Global range spans all three planes.
+    EXPECT_DOUBLE_EQ(res.image.source_min,  100.0);
+    EXPECT_DOUBLE_EQ(res.image.source_max, 1000.0);
+}
+
 TEST(XisfLoad, EndToEndMonoFloat32) {
     // Build a 4x4 image where each pixel == its 0-based index, then verify
     // the pixel data round-trips through load_xisf_from_memory.

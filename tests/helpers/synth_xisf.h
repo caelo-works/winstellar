@@ -25,4 +25,12 @@ std::vector<uint8_t> make_synth_xisf(int width, int height,
                                      const std::string& fits_keyword_name  = {},
                                      const std::string& fits_keyword_value = {});
 
+// Build a 3-channel (RGB) XISF byte buffer. R, G, B planes are stored
+// contiguously after the header. Each plane is width*height floats; the
+// loader concatenates them at offset = header_end + plane * channel_bytes.
+std::vector<uint8_t> make_synth_xisf_rgb(int width, int height,
+                                         const std::vector<float>& r,
+                                         const std::vector<float>& g,
+                                         const std::vector<float>& b);
+
 }  // namespace wst

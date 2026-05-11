@@ -74,4 +74,55 @@ std::vector<uint8_t> make_synth_xisf(int width, int height,
     return out;
 }
 
+std::vector<uint8_t> make_synth_xisf_rgb(int width, int height,
+                                         const std::vector<float>& r,
+                                         const std::vector<float>& g,
+                                         const std::vector<float>& b) {
+    if (width <= 0 || height <= 0) return {};
+    const size_t npix = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (r.size() != npix || g.size() != npix || b.size() != npix) return {};
+
+    constexpr size_t kPrefix = 16;
+    const size_t channel_bytes = npix * sizeof(float);
+    const size_t pixel_bytes   = 3 * channel_bytes;
+
+    constexpr int  kOffsetDigits = 10;
+    constexpr char kOffsetPlaceholder[kOffsetDigits + 1] = "0000000000";
+
+    std::ostringstream xml;
+    xml << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<xisf version=\"1.0\" xmlns=\"http://www.pixinsight.com/xisf\">"
+        << "<Image geometry=\"" << width << ":" << height << ":3\""
+        <<       " sampleFormat=\"Float32\""
+        <<       " colorSpace=\"RGB\""
+        <<       " location=\"attachment:" << kOffsetPlaceholder
+        <<                            ":" << pixel_bytes << "\">"
+        << "</Image></xisf>";
+    std::string xml_str = xml.str();
+
+    const uint64_t pixel_offset = kPrefix + xml_str.size();
+    char real_offset[kOffsetDigits + 1];
+    std::snprintf(real_offset, sizeof(real_offset), "%010llu",
+                  static_cast<unsigned long long>(pixel_offset));
+    const size_t pos = xml_str.find(kOffsetPlaceholder);
+    if (pos == std::string::npos) return {};
+    std::memcpy(&xml_str[pos], real_offset, kOffsetDigits);
+
+    std::vector<uint8_t> out;
+    out.reserve(kPrefix + xml_str.size() + pixel_bytes);
+    out.insert(out.end(), {'X','I','S','F','0','1','0','0'});
+    append_u32_le(out, static_cast<uint32_t>(xml_str.size()));
+    append_u32_le(out, 0);
+    out.insert(out.end(), xml_str.begin(), xml_str.end());
+
+    auto append_plane = [&](const std::vector<float>& plane) {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(plane.data());
+        out.insert(out.end(), bytes, bytes + channel_bytes);
+    };
+    append_plane(r);
+    append_plane(g);
+    append_plane(b);
+    return out;
+}
+
 }  // namespace wst

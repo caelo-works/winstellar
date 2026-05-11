@@ -182,96 +182,110 @@ LoadResult load_xisf_from_memory(const void* buffer, size_t size) {
     const size_t bps = bytes_per_sample(h.sample_format);
     if (bps == 0) { out.error = "Unsupported sampleFormat"; return out; }
 
-    const size_t channel_bytes = static_cast<size_t>(h.width) *
-                                 static_cast<size_t>(h.height) * bps;
-    if (h.pixel_offset + channel_bytes > size) {
+    const size_t npix          = static_cast<size_t>(h.width) *
+                                 static_cast<size_t>(h.height);
+    const size_t channel_bytes = npix * bps;
+    // RGB XISF stores R, G, B planes contiguously after pixel_offset. Load
+    // all three when the file declares RGB; otherwise fall back to the
+    // single-plane mono path. Mono / Gray + multi-channel "Gray" XISFs both
+    // come out as 1 plane.
+    const bool rgb = h.color_rgb && h.channels == 3;
+    const size_t planes_to_load = rgb ? 3u : 1u;
+    if (h.pixel_offset + planes_to_load * channel_bytes > size) {
         out.error = "Buffer truncated before pixel data end (need full file)";
         return out;
     }
 
-    // V1: load only the first channel (R for RGB, full data for Gray) and
-    // expose it as a single-plane FitsImage. RGB compositing comes later.
-    const auto* pix = static_cast<const uint8_t*>(buffer) + h.pixel_offset;
-    const size_t npix = static_cast<size_t>(h.width) * static_cast<size_t>(h.height);
+    const auto* pix_base = static_cast<const uint8_t*>(buffer) + h.pixel_offset;
 
     FitsImage img;
     img.width = h.width;
     img.height = h.height;
     img.source_type = h.sample_format;
     img.data.resize(npix);
+    if (rgb) {
+        img.data_g.resize(npix);
+        img.data_b.resize(npix);
+    }
 
-    // XISF top-down row order matches our convention (no flip needed). We
-    // dispatch on sample format, copy/convert into img.data, sanitize NaN/Inf
-    // in place (so downstream hot loops can skip their isfinite branch) and
-    // capture min/max in the same pass.
+    // Pointer table indexed by plane order: 0=R(data), 1=G(data_g), 2=B(data_b).
+    float* plane_ptr[3] = { img.data.data(),
+                            rgb ? img.data_g.data() : nullptr,
+                            rgb ? img.data_b.data() : nullptr };
+
+    // Convert one source plane (sample-format-dispatch) into a destination
+    // float buffer, sanitizing NaN/Inf on the float input paths. Integer
+    // formats are finite by construction so the sanitize branch is skipped.
+    auto convert_plane = [&](const uint8_t* src, float* dst) -> bool {
+        switch (h.sample_format) {
+            case PixelType::Float32: {
+                std::memcpy(dst, src, npix * sizeof(float));
+                for (size_t i = 0; i < npix; ++i) {
+                    if (!std::isfinite(dst[i])) dst[i] = 0.0f;
+                }
+                return true;
+            }
+            case PixelType::Float64: {
+                const double* s = reinterpret_cast<const double*>(src);
+                for (size_t i = 0; i < npix; ++i) {
+                    float v = static_cast<float>(s[i]);
+                    if (!std::isfinite(v)) v = 0.0f;
+                    dst[i] = v;
+                }
+                return true;
+            }
+            case PixelType::UInt8: {
+                for (size_t i = 0; i < npix; ++i)
+                    dst[i] = static_cast<float>(src[i]);
+                return true;
+            }
+            case PixelType::UInt16: {
+                const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
+                for (size_t i = 0; i < npix; ++i)
+                    dst[i] = static_cast<float>(s[i]);
+                return true;
+            }
+            case PixelType::Int16: {
+                const int16_t* s = reinterpret_cast<const int16_t*>(src);
+                for (size_t i = 0; i < npix; ++i)
+                    dst[i] = static_cast<float>(s[i]);
+                return true;
+            }
+            case PixelType::UInt32: {
+                const uint32_t* s = reinterpret_cast<const uint32_t*>(src);
+                for (size_t i = 0; i < npix; ++i)
+                    dst[i] = static_cast<float>(s[i]);
+                return true;
+            }
+            case PixelType::Int32: {
+                const int32_t* s = reinterpret_cast<const int32_t*>(src);
+                for (size_t i = 0; i < npix; ++i)
+                    dst[i] = static_cast<float>(s[i]);
+                return true;
+            }
+            default:
+                return false;
+        }
+    };
+
+    for (size_t p = 0; p < planes_to_load; ++p) {
+        if (!convert_plane(pix_base + p * channel_bytes, plane_ptr[p])) {
+            out.error = "Unsupported sample format";
+            return out;
+        }
+    }
+
+    // Global min/max across all loaded planes -- gives a balanced stretch
+    // across R, G, B without per-channel auto-white-balance (left for v2).
     float vmin = std::numeric_limits<float>::infinity();
     float vmax = -std::numeric_limits<float>::infinity();
-    float* dst = img.data.data();
-
-    auto scan_minmax = [&](size_t n) {
-        // Integer-derived data is finite by construction; only call the
-        // sanitizer on the float paths below.
-        for (size_t i = 0; i < n; ++i) {
+    for (size_t p = 0; p < planes_to_load; ++p) {
+        const float* dst = plane_ptr[p];
+        for (size_t i = 0; i < npix; ++i) {
             const float v = dst[i];
             if (v < vmin) vmin = v;
             if (v > vmax) vmax = v;
         }
-    };
-    auto sanitize_and_scan = [&](size_t n) {
-        for (size_t i = 0; i < n; ++i) {
-            float v = dst[i];
-            if (!std::isfinite(v)) { v = 0.0f; dst[i] = v; }
-            if (v < vmin) vmin = v;
-            if (v > vmax) vmax = v;
-        }
-    };
-
-    switch (h.sample_format) {
-        case PixelType::Float32: {
-            // Bulk memcpy is much faster than per-element copy; the conversion
-            // loop only sanitizes / scans.
-            std::memcpy(dst, pix, npix * sizeof(float));
-            sanitize_and_scan(npix);
-            break;
-        }
-        case PixelType::Float64: {
-            const double* src = reinterpret_cast<const double*>(pix);
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
-            sanitize_and_scan(npix);
-            break;
-        }
-        case PixelType::UInt8: {
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(pix[i]);
-            scan_minmax(npix);
-            break;
-        }
-        case PixelType::UInt16: {
-            const uint16_t* src = reinterpret_cast<const uint16_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
-            scan_minmax(npix);
-            break;
-        }
-        case PixelType::Int16: {
-            const int16_t* src = reinterpret_cast<const int16_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
-            scan_minmax(npix);
-            break;
-        }
-        case PixelType::UInt32: {
-            const uint32_t* src = reinterpret_cast<const uint32_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
-            scan_minmax(npix);
-            break;
-        }
-        case PixelType::Int32: {
-            const int32_t* src = reinterpret_cast<const int32_t*>(pix);
-            for (size_t i = 0; i < npix; ++i) dst[i] = static_cast<float>(src[i]);
-            scan_minmax(npix);
-            break;
-        }
-        default:
-            out.error = "Unsupported sample format";
-            return out;
     }
     if (!std::isfinite(vmin) || vmax <= vmin) { vmin = 0.0f; vmax = 1.0f; }
     img.source_min = vmin;

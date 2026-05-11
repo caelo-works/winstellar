@@ -89,14 +89,35 @@ RenderedBitmap render_to_bgra(const FitsImage& img,
     // doesn't pass max_width/height; only thumbnails do).
     if (target_w == img.width && target_h == img.height) {
         const size_t W = static_cast<size_t>(img.width);
-        for (int y = 0; y < target_h; ++y) {
-            const float* src = img.data.data() + static_cast<size_t>(y) * W;
-            uint8_t* row = out.bgra.data() +
-                           static_cast<size_t>(y) * static_cast<size_t>(out.stride_bytes);
-            for (int x = 0; x < target_w; ++x) {
-                const uint8_t g = lookup(lut, src[x], src_min, lut_scale);
-                uint8_t* px = row + static_cast<ptrdiff_t>(x) * 4;
-                px[0] = g; px[1] = g; px[2] = g; px[3] = 255;
+        if (img.is_rgb()) {
+            // Composite BGRA from three planes, all sharing the same LUT
+            // (single balanced stretch for v1). Loaders pack R into `data`,
+            // G into `data_g`, B into `data_b` -- BGRA order on output.
+            for (int y = 0; y < target_h; ++y) {
+                const size_t off = static_cast<size_t>(y) * W;
+                const float* src_r = img.data.data()   + off;
+                const float* src_g = img.data_g.data() + off;
+                const float* src_b = img.data_b.data() + off;
+                uint8_t* row = out.bgra.data() +
+                               static_cast<size_t>(y) * static_cast<size_t>(out.stride_bytes);
+                for (int x = 0; x < target_w; ++x) {
+                    uint8_t* px = row + static_cast<ptrdiff_t>(x) * 4;
+                    px[0] = lookup(lut, src_b[x], src_min, lut_scale);  // B
+                    px[1] = lookup(lut, src_g[x], src_min, lut_scale);  // G
+                    px[2] = lookup(lut, src_r[x], src_min, lut_scale);  // R
+                    px[3] = 255;
+                }
+            }
+        } else {
+            for (int y = 0; y < target_h; ++y) {
+                const float* src = img.data.data() + static_cast<size_t>(y) * W;
+                uint8_t* row = out.bgra.data() +
+                               static_cast<size_t>(y) * static_cast<size_t>(out.stride_bytes);
+                for (int x = 0; x < target_w; ++x) {
+                    const uint8_t g = lookup(lut, src[x], src_min, lut_scale);
+                    uint8_t* px = row + static_cast<ptrdiff_t>(x) * 4;
+                    px[0] = g; px[1] = g; px[2] = g; px[3] = 255;
+                }
             }
         }
         return out;
@@ -107,6 +128,7 @@ RenderedBitmap render_to_bgra(const FitsImage& img,
     // sanitize NaN/Inf to 0 so no per-pixel isfinite check is needed.
     const double scale_x = static_cast<double>(img.width) / target_w;
     const double scale_y = static_cast<double>(img.height) / target_h;
+    const bool   rgb     = img.is_rgb();
 
     for (int y = 0; y < target_h; ++y) {
         const int y0 = std::min(img.height - 1, static_cast<int>(y * scale_y));
@@ -120,20 +142,32 @@ RenderedBitmap render_to_bgra(const FitsImage& img,
             const int x1 = std::min(img.width,
                                     std::max(x0 + 1, static_cast<int>((x + 1) * scale_x)));
 
-            double sum = 0.0;
+            double sum_r = 0.0, sum_g = 0.0, sum_b = 0.0;
             int count = 0;
             for (int yy = y0; yy < y1; ++yy) {
-                const float* src = img.data.data() +
-                                   static_cast<size_t>(yy) * static_cast<size_t>(img.width);
+                const size_t row_off = static_cast<size_t>(yy) * static_cast<size_t>(img.width);
+                const float* sr = img.data.data() + row_off;
+                const float* sg = rgb ? img.data_g.data() + row_off : nullptr;
+                const float* sb = rgb ? img.data_b.data() + row_off : nullptr;
                 for (int xx = x0; xx < x1; ++xx) {
-                    sum += src[xx];
+                    sum_r += sr[xx];
+                    if (rgb) { sum_g += sg[xx]; sum_b += sb[xx]; }
                     ++count;
                 }
             }
-            const float v = (count > 0) ? static_cast<float>(sum / count) : 0.0f;
-            const uint8_t g = lookup(lut, v, src_min, lut_scale);
+            const float r_avg = (count > 0) ? static_cast<float>(sum_r / count) : 0.0f;
             uint8_t* px = row + static_cast<ptrdiff_t>(x) * 4;
-            px[0] = g; px[1] = g; px[2] = g; px[3] = 255;
+            if (rgb) {
+                const float g_avg = static_cast<float>(sum_g / count);
+                const float b_avg = static_cast<float>(sum_b / count);
+                px[0] = lookup(lut, b_avg, src_min, lut_scale);
+                px[1] = lookup(lut, g_avg, src_min, lut_scale);
+                px[2] = lookup(lut, r_avg, src_min, lut_scale);
+            } else {
+                const uint8_t g = lookup(lut, r_avg, src_min, lut_scale);
+                px[0] = g; px[1] = g; px[2] = g;
+            }
+            px[3] = 255;
         }
     }
 
