@@ -137,7 +137,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
     } else {
         Write-Host ""
-        Write-Host "(push skipped — pass -Push to publish commit + tag to origin)" -ForegroundColor Yellow
+        Write-Host "(push skipped -- pass -Push to publish commit + tag to origin)" -ForegroundColor Yellow
     }
 
     # --- Done -----------------------------------------------------------------
