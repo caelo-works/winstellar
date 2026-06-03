@@ -82,6 +82,10 @@ Source: "{#BuildDir}\pugixml.dll";        DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\z.dll";              DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
 ; pthreads-win32 is a transitive dep of cfitsio (REENTRANT build for thread-safe loads)
 Source: "{#BuildDir}\pthreadVC3.dll";     DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
+; LibRaw (camera RAW: NEF/CR2/ARW/DNG/...) + its lcms2 colour-management dep.
+; zlib (z.dll above) is shared with cfitsio. raw_r is the thread-safe variant.
+Source: "{#BuildDir}\raw_r.dll";          DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
+Source: "{#BuildDir}\lcms2-2.dll";        DestDir: "{app}"; Flags: ignoreversion{#SignFlag}
 
 [Icons]
 Name: "{group}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"

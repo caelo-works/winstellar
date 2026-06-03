@@ -1,5 +1,6 @@
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
+find_package(libraw CONFIG REQUIRED)
 
 add_library(fits_core STATIC
     src/fits_loader.cpp
@@ -8,6 +9,7 @@ add_library(fits_core STATIC
     src/fits_debayer.cpp
     src/fits_headers.cpp
     src/xisf_loader.cpp
+    src/raw_loader.cpp
     src/analysis.cpp
     src/cache.cpp
 )
@@ -22,6 +24,7 @@ target_link_libraries(fits_core
     PRIVATE
         unofficial::sqlite3::sqlite3
         pugixml::pugixml
+        libraw::raw_r
 )
 
 set_target_properties(fits_core PROPERTIES

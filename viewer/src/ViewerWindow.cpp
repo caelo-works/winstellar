@@ -205,9 +205,18 @@ void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 bool has_astro_extension(const wchar_t* name) {
     const wchar_t* ext = ::PathFindExtensionW(name);
     if (!ext || !*ext) return false;
-    return ::_wcsicmp(ext, L".fit")  == 0
-        || ::_wcsicmp(ext, L".fits") == 0
-        || ::_wcsicmp(ext, L".xisf") == 0;
+    // FITS + XISF, plus TIFF-based camera RAW. The RAW set mirrors what
+    // raw_loader::is_raw actually accepts (it sniffs the TIFF byte-order magic
+    // these formats share), so Prev/Next never lands on a file the loader
+    // would reject. Keep this in sync with the Open dialog filter below.
+    static const wchar_t* const kExts[] = {
+        L".fit", L".fits", L".xisf",
+        L".nef", L".nrw", L".cr2", L".arw", L".sr2",
+        L".dng", L".pef", L".srw", L".iiq",
+    };
+    for (const wchar_t* e : kExts)
+        if (::_wcsicmp(ext, e) == 0) return true;
+    return false;
 }
 
 // Enumerate sibling astro files in the directory of `path`, natural-sorted
@@ -1159,7 +1168,12 @@ void ViewerWindow::on_open_dialog() {
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd_;
-    ofn.lpstrFilter = L"Astro images\0*.fit;*.fits;*.xisf\0FITS\0*.fit;*.fits\0XISF\0*.xisf\0All files\0*.*\0";
+    ofn.lpstrFilter =
+        L"Astro images\0*.fit;*.fits;*.xisf;*.nef;*.nrw;*.cr2;*.arw;*.sr2;*.dng;*.pef;*.srw;*.iiq\0"
+        L"FITS\0*.fit;*.fits\0"
+        L"XISF\0*.xisf\0"
+        L"Camera RAW\0*.nef;*.nrw;*.cr2;*.arw;*.sr2;*.dng;*.pef;*.srw;*.iiq\0"
+        L"All files\0*.*\0";
     ofn.lpstrFile = buf;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;

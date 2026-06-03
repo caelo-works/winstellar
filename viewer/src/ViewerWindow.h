@@ -42,7 +42,7 @@ private:
     struct LoadResult;
     void on_load_finished(std::uint64_t gen, LoadResult* r);
 
-    // Walk siblings in the current file's directory (.fit/.fits/.xisf,
+    // Walk siblings in the current file's directory (FITS / XISF / camera RAW,
     // natural-sort order) and load the next/previous one. step = +1 or -1.
     // Wraps around. No-op if no file is currently loaded.
     void navigate_sibling(int step);

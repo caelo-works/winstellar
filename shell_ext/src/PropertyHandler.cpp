@@ -4,6 +4,7 @@
 #include "fits_core/fits_loader.h"
 #include "fits_core/fits_headers.h"
 #include "fits_core/xisf_loader.h"
+#include "fits_core/raw_loader.h"
 #include "fits_core/analysis.h"
 #include "fits_core/cache.h"
 
@@ -158,18 +159,34 @@ void FitsPropertyHandler::populate() {
         bool can_run_analysis = false;
         fitsx::LoadResult loaded;
 
-        if (fitsx::is_xisf(buf_.data(), buf_.size())) {
+        switch (fitsx::detect_format(buf_.data(), buf_.size())) {
+        case fitsx::ImageFormat::Xisf: {
             auto h = fitsx::parse_xisf_header(buf_.data(), buf_.size());
             if (!h.success) return;
             img.width = h.header.width;
             img.height = h.header.height;
             img.headers = std::move(h.header.fits_keywords);
             // No pixel data -> no analysis. Cache miss path won't run.
-        } else {
+            break;
+        }
+        case fitsx::ImageFormat::Raw: {
+            // Camera RAW: pull EXIF only (no demosaic). Decoding a 24 Mpx
+            // frame just to fill columns would choke Explorer when scrolling
+            // a folder of NEFs; pixel stats / HFR are skipped for RAW in v1.
+            auto m = fitsx::parse_raw_metadata(buf_.data(), buf_.size());
+            if (!m.success) return;
+            img.width = m.width;
+            img.height = m.height;
+            img.headers = std::move(m.headers);
+            break;
+        }
+        case fitsx::ImageFormat::Fits: {
             loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
             if (!loaded.success) return;
             img = std::move(loaded.image);
             can_run_analysis = true;
+            break;
+        }
         }
 
         // System.Image.HorizontalSize / VerticalSize  (UI4)

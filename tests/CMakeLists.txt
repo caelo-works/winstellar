@@ -44,10 +44,12 @@ winstellar_add_test_exe(unit_headers    unit_headers.cpp)
 winstellar_add_test_exe(unit_xisf_magic unit_xisf_magic.cpp)
 winstellar_add_test_exe(unit_cache_key  unit_cache_key.cpp)
 winstellar_add_test_exe(unit_debayer    unit_debayer.cpp)
+winstellar_add_test_exe(unit_raw        unit_raw.cpp)
 
 # ---------- Phase 2: integration tests (file/buffer I/O) -------------------
 winstellar_add_test_exe(integration_fits_loader integration_fits_loader.cpp)
 winstellar_add_test_exe(integration_xisf        integration_xisf.cpp)
+winstellar_add_test_exe(integration_raw         integration_raw.cpp)
 winstellar_add_test_exe(integration_analysis    integration_analysis.cpp)
 winstellar_add_test_exe(integration_cache       integration_cache.cpp)
 

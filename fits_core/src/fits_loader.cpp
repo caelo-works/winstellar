@@ -2,6 +2,7 @@
 #include "fits_core/fits_headers.h"
 #include "fits_core/fits_debayer.h"
 #include "fits_core/xisf_loader.h"
+#include "fits_core/raw_loader.h"
 
 #include <fitsio.h>
 
@@ -210,6 +211,12 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
 
 }  // namespace
 
+ImageFormat detect_format(const void* buffer, size_t size) noexcept {
+    if (is_xisf(buffer, size)) return ImageFormat::Xisf;
+    if (is_raw(buffer, size))  return ImageFormat::Raw;
+    return ImageFormat::Fits;
+}
+
 LoadResult load_from_memory(const void* buffer, size_t size) {
     LoadResult res;
     if (!buffer || size == 0) {
@@ -217,9 +224,14 @@ LoadResult load_from_memory(const void* buffer, size_t size) {
         return res;
     }
 
-    // Auto-dispatch by magic. XISF (PixInsight) files start with "XISF0100".
-    if (is_xisf(buffer, size)) {
-        return load_xisf_from_memory(buffer, size);
+    // Auto-dispatch by magic (see detect_format): XISF starts with "XISF0100",
+    // camera RAW (NEF/CR2/ARW/DNG/...) opens with a TIFF byte-order marker, and
+    // FITS starts with the ASCII "SIMPLE" card -- no clash, CFITSIO is the
+    // final fallback.
+    switch (detect_format(buffer, size)) {
+        case ImageFormat::Xisf: return load_xisf_from_memory(buffer, size);
+        case ImageFormat::Raw:  return load_raw_from_memory(buffer, size);
+        case ImageFormat::Fits: break;  // handled by CFITSIO below
     }
 
     fitsfile* fptr = nullptr;
