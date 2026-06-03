@@ -5,6 +5,7 @@ add_library(fits_core STATIC
     src/fits_loader.cpp
     src/fits_stretch.cpp
     src/fits_render.cpp
+    src/fits_debayer.cpp
     src/fits_headers.cpp
     src/xisf_loader.cpp
     src/analysis.cpp

@@ -35,4 +35,13 @@ SynthFits make_star_field(int width = 128, int height = 128,
 // Constant-value image; used for stretch/auto-stretch fixtures.
 SynthFits make_constant(int width, int height, float value);
 
+// Write a 3-plane (NAXIS=3, NAXIS3=3) RGB cube FITS, planar in FITS order
+// (full R plane, then G, then B). Each plane is width*height, row 0 = bottom.
+// Returns the path written, or empty on failure.
+std::string write_synth_fits_rgb_cube(const std::string& path,
+                                      int width, int height,
+                                      const std::vector<float>& r,
+                                      const std::vector<float>& g,
+                                      const std::vector<float>& b);
+
 }  // namespace wst

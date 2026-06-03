@@ -45,6 +45,45 @@ std::string write_synth_fits(const std::string& path, const SynthFits& spec) {
     return (status == 0) ? path : std::string{};
 }
 
+std::string write_synth_fits_rgb_cube(const std::string& path,
+                                      int width, int height,
+                                      const std::vector<float>& r,
+                                      const std::vector<float>& g,
+                                      const std::vector<float>& b) {
+    if (width <= 0 || height <= 0) return {};
+    const size_t npix = static_cast<size_t>(width) * height;
+    if (r.size() != npix || g.size() != npix || b.size() != npix) return {};
+
+    fitsfile* fp = nullptr;
+    int status = 0;
+    const std::string create_path = "!" + path;
+    if (fits_create_file(&fp, create_path.c_str(), &status) != 0) return {};
+
+    long naxes[3] = { width, height, 3 };
+    if (fits_create_img(fp, FLOAT_IMG, 3, naxes, &status) != 0) {
+        fits_close_file(fp, &status);
+        return {};
+    }
+
+    // Planar write: R plane fills pixels [1..npix], G the next, B the last.
+    std::vector<float> planar;
+    planar.reserve(npix * 3);
+    planar.insert(planar.end(), r.begin(), r.end());
+    planar.insert(planar.end(), g.begin(), g.end());
+    planar.insert(planar.end(), b.begin(), b.end());
+
+    long fpixel[3] = { 1, 1, 1 };
+    if (fits_write_pix(fp, TFLOAT, fpixel,
+                       static_cast<long>(planar.size()),
+                       planar.data(), &status) != 0) {
+        fits_close_file(fp, &status);
+        return {};
+    }
+
+    fits_close_file(fp, &status);
+    return (status == 0) ? path : std::string{};
+}
+
 SynthFits make_constant(int width, int height, float value) {
     SynthFits s;
     s.width = width;

@@ -30,6 +30,15 @@ struct PixelStats {
     uint64_t max_count = 0;
 };
 
+// Rec.601 luma weights. For RGB images (debayered CFA or color XISF) all
+// pixel statistics and star detection run on luma rather than the red channel
+// alone -- red is typically the faintest channel in astro frames, so HFR /
+// star counts off R-only would be unreliable. Mono images read `data` directly.
+inline float luma_at(const FitsImage& img, size_t i) noexcept {
+    if (!img.is_rgb()) return img.data[i];
+    return 0.299f * img.data[i] + 0.587f * img.data_g[i] + 0.114f * img.data_b[i];
+}
+
 PixelStats compute_pixel_stats(const FitsImage& img) {
     PixelStats s;
     const size_t n = img.pixel_count();
@@ -45,7 +54,7 @@ PixelStats compute_pixel_stats(const FitsImage& img) {
     float vmin = std::numeric_limits<float>::infinity();
     float vmax = -std::numeric_limits<float>::infinity();
     for (size_t i = 0; i < n; ++i) {
-        const float v = img.data[i];
+        const float v = luma_at(img, i);
         const double dv = v - mean;
         mean += dv / static_cast<double>(i + 1);
         m2 += dv * (v - mean);
@@ -62,7 +71,7 @@ PixelStats compute_pixel_stats(const FitsImage& img) {
     // pure comparisons + an increment).
     uint64_t cmin = 0, cmax = 0;
     for (size_t i = 0; i < n; ++i) {
-        const float v = img.data[i];
+        const float v = luma_at(img, i);
         if (v == vmin) ++cmin;
         if (v == vmax) ++cmax;
     }
@@ -78,7 +87,7 @@ PixelStats compute_pixel_stats(const FitsImage& img) {
     const size_t step = std::max<size_t>(1, n / kTargetSamples);
     std::vector<float> work;
     work.reserve(n / step + 1);
-    for (size_t i = 0; i < n; i += step) work.push_back(img.data[i]);
+    for (size_t i = 0; i < n; i += step) work.push_back(luma_at(img, i));
 
     if (!work.empty()) {
         auto mid = work.begin() + work.size() / 2;
@@ -163,11 +172,17 @@ std::vector<StarInfo> detect_stars(const FitsImage& img,
     std::vector<int32_t> curr_row(static_cast<size_t>(W), -1);
     UnionFind uf;
     std::vector<PixelEntry> pixels;
+    // RGB frames threshold on luma (see luma_at); mono reads `data` directly.
+    const bool rgb = img.is_rgb();
     // Loaders sanitize NaN/Inf so the threshold compare is the only branch.
     for (int y = 0; y < H; ++y) {
-        const float* row = img.data.data() + static_cast<size_t>(y) * static_cast<size_t>(W);
+        const size_t roff = static_cast<size_t>(y) * static_cast<size_t>(W);
+        const float* row   = img.data.data()   + roff;
+        const float* row_g = rgb ? img.data_g.data() + roff : nullptr;
+        const float* row_b = rgb ? img.data_b.data() + roff : nullptr;
         for (int x = 0; x < W; ++x) {
-            const float v = row[x];
+            const float v = rgb ? (0.299f * row[x] + 0.587f * row_g[x] + 0.114f * row_b[x])
+                                : row[x];
             if (v <= threshold_value) { curr_row[x] = -1; continue; }
 
             // 8-connected: NW, N, NE in prev row; W in curr row.

@@ -1,5 +1,6 @@
 #include "fits_core/fits_loader.h"
 #include "fits_core/fits_headers.h"
+#include "fits_core/fits_debayer.h"
 #include "fits_core/xisf_loader.h"
 
 #include <fitsio.h>
@@ -102,6 +103,11 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
 
     const long width = naxes[0];
     const long height = naxes[1];
+    // A NAXIS=3 cube with a 3rd axis of exactly 3 is an already-separated RGB
+    // image (planar: R plane, then G, then B). Anything else 3-D is treated as
+    // mono (first plane only) -- multi-frame cubes are out of scope.
+    const long nplanes = (naxis >= 3 && naxes[2] > 0) ? naxes[2] : 1;
+    const bool color_cube = (nplanes == 3);
 
     double bzero = 0.0, bscale = 1.0;
     {
@@ -111,43 +117,85 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
         if (fits_read_key(fptr, TDOUBLE, "BSCALE", &tmp, nullptr, &s) == 0) bscale = tmp;
     }
 
+    // Detect a Bayer CFA on 2-D frames. The pattern letters describe the data
+    // in FITS-native (bottom-up) order, so we must demosaic BEFORE flipping
+    // rows -- a vertical flip swaps the Bayer row parity (RGGB <-> GBRG).
+    BayerPattern bayer = BayerPattern::None;
+    int bxoff = 0, byoff = 0;
+    if (!color_cube) {
+        char bp[FLEN_VALUE] = {0};
+        int s = 0;
+        if (fits_read_key(fptr, TSTRING, "BAYERPAT", bp, nullptr, &s) == 0) {
+            bayer = parse_bayer_pattern(bp);
+        }
+        if (bayer != BayerPattern::None) {
+            int v = 0; s = 0;
+            if (fits_read_key(fptr, TINT, "XBAYROFF", &v, nullptr, &s) == 0) bxoff = v;
+            else { s = 0; if (fits_read_key(fptr, TINT, "BAYOFFX", &v, nullptr, &s) == 0) bxoff = v; }
+            v = 0; s = 0;
+            if (fits_read_key(fptr, TINT, "YBAYROFF", &v, nullptr, &s) == 0) byoff = v;
+            else { s = 0; if (fits_read_key(fptr, TINT, "BAYOFFY", &v, nullptr, &s) == 0) byoff = v; }
+        }
+    }
+
     const size_t npix = static_cast<size_t>(width) * static_cast<size_t>(height);
-    std::vector<float> raw(npix);
+    const long planes_to_read = color_cube ? 3 : 1;
+    std::vector<float> raw(npix * static_cast<size_t>(planes_to_read));
     long fpixel[3] = {1, 1, 1};
     int anynul = 0;
     float nulval = 0.0f;
     status = 0;
-    if (fits_read_pix(fptr, TFLOAT, fpixel, static_cast<long>(npix),
+    if (fits_read_pix(fptr, TFLOAT, fpixel,
+                      static_cast<long>(npix) * planes_to_read,
                       &nulval, raw.data(), &anynul, &status) != 0) {
         return finish_with_error(fptr, status, "fits_read_pix: ");
     }
 
-    // Single pass over the pixel data:
-    //  - flip row order (FITS row 1 == bottom of image; we store top-down)
-    //  - sanitize NaN/Inf in place (so downstream hot loops can drop their
-    //    isfinite branch — see fits_render.cpp / analysis.cpp / Histogram.cpp)
-    //  - capture global min/max
-    // Fusing these three was previously three separate passes over npix.
-    std::vector<float> flipped(npix);
+    // Flip a single native (bottom-up) plane into top-down storage, sanitizing
+    // NaN/Inf to 0 and folding global min/max. Downstream hot loops (render /
+    // analysis / histogram) rely on the sanitize so they can drop the
+    // isfinite branch. For RGB the min/max spans all three channels so the
+    // shared render LUT covers the brightest channel.
     float vmin = std::numeric_limits<float>::infinity();
     float vmax = -std::numeric_limits<float>::infinity();
-    for (long y = 0; y < height; ++y) {
-        const float* src = raw.data() + static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width);
-        float* dst = flipped.data() + static_cast<size_t>(y) * static_cast<size_t>(width);
-        for (long x = 0; x < width; ++x) {
-            float v = src[x];
-            if (!std::isfinite(v)) v = 0.0f;   // NaN/Inf -> 0 (renders as black)
-            dst[x] = v;
-            if (v < vmin) vmin = v;
-            if (v > vmax) vmax = v;
+    auto flip_into = [&](const float* native, std::vector<float>& dst) {
+        dst.resize(npix);
+        for (long y = 0; y < height; ++y) {
+            const float* src = native + static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width);
+            float* d = dst.data() + static_cast<size_t>(y) * static_cast<size_t>(width);
+            for (long x = 0; x < width; ++x) {
+                float v = src[x];
+                if (!std::isfinite(v)) v = 0.0f;
+                d[x] = v;
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
         }
+    };
+
+    if (color_cube) {
+        flip_into(raw.data(),                 res.image.data);
+        flip_into(raw.data() + npix,          res.image.data_g);
+        flip_into(raw.data() + 2 * npix,      res.image.data_b);
+    } else if (bayer != BayerPattern::None) {
+        // Sanitize in native order, demosaic, gray-world balance, then flip
+        // all three reconstructed planes top-down.
+        for (float& v : raw) { if (!std::isfinite(v)) v = 0.0f; }
+        std::vector<float> rr, gg, bb;
+        debayer_bilinear(raw, static_cast<int>(width), static_cast<int>(height),
+                         bayer, bxoff, byoff, rr, gg, bb);
+        gray_world_balance(rr, gg, bb);
+        flip_into(rr.data(), res.image.data);
+        flip_into(gg.data(), res.image.data_g);
+        flip_into(bb.data(), res.image.data_b);
+    } else {
+        flip_into(raw.data(), res.image.data);
     }
     if (!std::isfinite(vmin) || vmax <= vmin) { vmin = 0.0f; vmax = 1.0f; }
 
     res.image.width = static_cast<int>(width);
     res.image.height = static_cast<int>(height);
     res.image.source_type = bitpix_to_type(bitpix);
-    res.image.data = std::move(flipped);
     res.image.source_min = vmin;
     res.image.source_max = vmax;
     res.image.bzero = bzero;
