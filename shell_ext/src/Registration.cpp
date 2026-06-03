@@ -9,10 +9,20 @@
 
 namespace {
 
-constexpr const wchar_t* kFitExt = L".fit";
-constexpr const wchar_t* kFitsExt = L".fits";
-constexpr const wchar_t* kXisfExt = L".xisf";
 constexpr const wchar_t* kProgId = L"WinStellar.Image";
+
+// Extensions whose Explorer thumbnail / preview / property handlers we own.
+// FITS + XISF plus the TIFF-based camera RAW set (mirrors raw_loader::is_raw
+// and the viewer's has_astro_extension). Single source for both register and
+// unregister so they can't drift.
+constexpr const wchar_t* kAllExts[] = {
+    L".fit", L".fits", L".xisf",
+    L".nef", L".nrw", L".cr2", L".arw", L".sr2", L".dng", L".pef", L".srw", L".iiq",
+};
+// Subset we also claim as the default double-click association -- only the
+// formats Windows has no native handler for. RAW keeps the user's photo app as
+// its default opener; we only add our shell handlers + an "Open with" entry.
+constexpr const wchar_t* kDefaultAssocExts[] = { L".fit", L".fits", L".xisf" };
 
 constexpr const wchar_t* kClsIdRoot = L"Software\\Classes\\CLSID";
 
@@ -159,19 +169,13 @@ HRESULT RegisterShellExtensions() {
                  guid_to_string(CLSID_FitsPreviewHandler).c_str(),
                  L"FITS Preview Handler");
 
-    // Property handlers per extension
-    for (const wchar_t* ext : { kFitExt, kFitsExt, kXisfExt }) {
+    // Property + preview + thumbnail handlers for every supported extension.
+    for (const wchar_t* ext : kAllExts) {
         std::wstring k = std::wstring(kPropHandlersBase) + L"\\" + ext;
         write_string(root, k, nullptr, guid_to_string(CLSID_FitsPropertyHandler));
+        register_extension(root, ext,
+                           CLSID_FitsPreviewHandler, CLSID_FitsThumbnailProvider);
     }
-
-    // File extension associations (preview + thumbnail)
-    register_extension(root, kFitExt,
-                       CLSID_FitsPreviewHandler, CLSID_FitsThumbnailProvider);
-    register_extension(root, kFitsExt,
-                       CLSID_FitsPreviewHandler, CLSID_FitsThumbnailProvider);
-    register_extension(root, kXisfExt,
-                       CLSID_FitsPreviewHandler, CLSID_FitsThumbnailProvider);
 
     // ProgID: lets Explorer pick up our icon and open .fit/.fits with the
     // viewer. Only registered if WinStellar.exe was staged alongside the DLL.
@@ -188,12 +192,16 @@ HRESULT RegisterShellExtensions() {
             // FriendlyAppName for the Open With UI
             write_string(root, progBase + L"\\Application", L"ApplicationName", L"WinStellar");
 
-            // Bind .fit / .fits / .xisf to this ProgID as the default
-            // association and list it in the Open With menu.
-            for (const wchar_t* ext : { kFitExt, kFitsExt, kXisfExt }) {
+            // List WinStellar in the Open With menu for every supported
+            // extension; make it the *default* opener only for the formats
+            // Windows has no handler for (never hijack RAW's default app).
+            for (const wchar_t* ext : kAllExts) {
+                const std::wstring extKey = std::wstring(L"Software\\Classes\\") + ext;
+                write_string(root, extKey + L"\\OpenWithProgids", kProgId, L"");
+            }
+            for (const wchar_t* ext : kDefaultAssocExts) {
                 const std::wstring extKey = std::wstring(L"Software\\Classes\\") + ext;
                 write_string(root, extKey, nullptr, kProgId);
-                write_string(root, extKey + L"\\OpenWithProgids", kProgId, L"");
             }
         }
     }
@@ -237,13 +245,12 @@ HRESULT UnregisterShellExtensions() {
     }
 
     // Extension associations
-    unregister_extension(root, kFitExt);
-    unregister_extension(root, kFitsExt);
-    unregister_extension(root, kXisfExt);
+    for (const wchar_t* ext : kAllExts)
+        unregister_extension(root, ext);
 
     // ProgID + bindings
     delete_tree(root, std::wstring(L"Software\\Classes\\") + kProgId);
-    for (const wchar_t* ext : { kFitExt, kFitsExt, kXisfExt }) {
+    for (const wchar_t* ext : kAllExts) {
         const std::wstring extKey = std::wstring(L"Software\\Classes\\") + ext;
         // Remove our entry from OpenWithProgids
         ::RegDeleteKeyValueW(root, (extKey + L"\\OpenWithProgids").c_str(), kProgId);
@@ -263,9 +270,8 @@ HRESULT UnregisterShellExtensions() {
     }
 
     // Property handler associations
-    delete_tree(root, std::wstring(kPropHandlersBase) + L"\\" + kFitExt);
-    delete_tree(root, std::wstring(kPropHandlersBase) + L"\\" + kFitsExt);
-    delete_tree(root, std::wstring(kPropHandlersBase) + L"\\" + kXisfExt);
+    for (const wchar_t* ext : kAllExts)
+        delete_tree(root, std::wstring(kPropHandlersBase) + L"\\" + ext);
 
     // PreviewHandlers entry
     ::RegDeleteKeyValueW(root, kPreviewHandlersList,

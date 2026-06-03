@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -88,8 +89,12 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size) {
     if (!buffer || size == 0) { res.error = "Empty buffer"; return res; }
 
     try {
-        LibRaw rp;
-        int rc = rp.open_buffer(const_cast<void*>(buffer), size);
+        // Heap-allocate: a LibRaw object embeds imgdata (>200 KB, dominated by
+        // color.curve[65536]). On the stack it overflows the small stacks of
+        // explorer.exe's shell-handler threads (observed: 0xC00000FD). The heap
+        // keeps the giant struct off the caller's stack.
+        auto rp = std::make_unique<LibRaw>();
+        int rc = rp->open_buffer(const_cast<void*>(buffer), size);
         if (rc != LIBRAW_SUCCESS) {
             res.error = std::string("LibRaw open_buffer: ") + libraw_strerror(rc);
             return res;
@@ -98,7 +103,7 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size) {
         // Linear 16-bit output with the camera's as-shot white balance: no
         // gamma curve, no auto-brightness, sRGB primaries. Our auto-stretch
         // does the display tone mapping, exactly as for FITS/XISF.
-        libraw_output_params_t& P = rp.imgdata.params;
+        libraw_output_params_t& P = rp->imgdata.params;
         P.output_bps     = 16;
         P.no_auto_bright = 1;
         P.use_camera_wb  = 1;
@@ -113,26 +118,26 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size) {
         // and irrelevant for a viewer. See tools/raw_bench.cpp for the numbers.
         P.user_qual      = 0;
 
-        rc = rp.unpack();
+        rc = rp->unpack();
         if (rc != LIBRAW_SUCCESS) {
             res.error = std::string("LibRaw unpack: ") + libraw_strerror(rc);
             return res;
         }
-        rc = rp.dcraw_process();
+        rc = rp->dcraw_process();
         if (rc != LIBRAW_SUCCESS) {
             res.error = std::string("LibRaw process: ") + libraw_strerror(rc);
             return res;
         }
 
         int err = 0;
-        libraw_processed_image_t* out = rp.dcraw_make_mem_image(&err);
+        libraw_processed_image_t* out = rp->dcraw_make_mem_image(&err);
         if (!out) {
             res.error = std::string("LibRaw make_mem_image: ") + libraw_strerror(err);
             return res;
         }
         if (out->type != LIBRAW_IMAGE_BITMAP || out->bits != 16 ||
             (out->colors != 3 && out->colors != 1)) {
-            rp.dcraw_clear_mem(out);
+            rp->dcraw_clear_mem(out);
             res.error = "Unexpected LibRaw image format";
             return res;
         }
@@ -180,10 +185,10 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size) {
         img.source_min = vmin;
         img.source_max = vmax;
 
-        synth_headers(rp, img.headers);
+        synth_headers(*rp, img.headers);
 
-        rp.dcraw_clear_mem(out);
-        rp.recycle();
+        rp->dcraw_clear_mem(out);
+        rp->recycle();
         res.success = true;
         return res;
     } catch (const std::exception& e) {
@@ -199,14 +204,14 @@ RawMetadata parse_raw_metadata(const void* buffer, size_t size) {
     RawMetadata md;
     if (!buffer || size == 0) return md;
     try {
-        LibRaw rp;
-        if (rp.open_buffer(const_cast<void*>(buffer), size) != LIBRAW_SUCCESS) return md;
+        auto rp = std::make_unique<LibRaw>();   // heap, not stack (see above)
+        if (rp->open_buffer(const_cast<void*>(buffer), size) != LIBRAW_SUCCESS) return md;
         // open_buffer parses headers/EXIF without unpacking pixels.
-        const libraw_image_sizes_t& s = rp.imgdata.sizes;
+        const libraw_image_sizes_t& s = rp->imgdata.sizes;
         md.width  = (s.iwidth  > 0) ? s.iwidth  : s.width;
         md.height = (s.iheight > 0) ? s.iheight : s.height;
-        synth_headers(rp, md.headers);
-        rp.recycle();
+        synth_headers(*rp, md.headers);
+        rp->recycle();
         md.success = true;
         return md;
     } catch (...) {

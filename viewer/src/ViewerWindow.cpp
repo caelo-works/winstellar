@@ -202,21 +202,40 @@ constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
 template <typename T>
 void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
+// Single source of truth for the file extensions the viewer recognizes,
+// grouped so the Open dialog can offer per-format filters. The RAW set mirrors
+// what raw_loader::is_raw accepts (the TIFF byte-order magic these formats
+// share). Both Prev/Next sibling enumeration and the Open dialog derive from
+// these, so the two can't drift.
+constexpr const wchar_t* const kFitsExts[] = { L".fit", L".fits" };
+constexpr const wchar_t* const kXisfExts[] = { L".xisf" };
+constexpr const wchar_t* const kRawExts[]  = {
+    L".nef", L".nrw", L".cr2", L".arw", L".sr2", L".dng", L".pef", L".srw", L".iiq",
+};
+
+template <size_t N>
+bool ext_in(const wchar_t* ext, const wchar_t* const (&list)[N]) {
+    for (const wchar_t* e : list)
+        if (::_wcsicmp(ext, e) == 0) return true;
+    return false;
+}
+
+// Join an extension array into a ";"-separated glob ("*.nef;*.cr2;...").
+template <size_t N>
+std::wstring ext_globs(const wchar_t* const (&list)[N]) {
+    std::wstring s;
+    for (const wchar_t* e : list) {
+        if (!s.empty()) s += L';';
+        s += L'*';
+        s += e;
+    }
+    return s;
+}
+
 bool has_astro_extension(const wchar_t* name) {
     const wchar_t* ext = ::PathFindExtensionW(name);
     if (!ext || !*ext) return false;
-    // FITS + XISF, plus TIFF-based camera RAW. The RAW set mirrors what
-    // raw_loader::is_raw actually accepts (it sniffs the TIFF byte-order magic
-    // these formats share), so Prev/Next never lands on a file the loader
-    // would reject. Keep this in sync with the Open dialog filter below.
-    static const wchar_t* const kExts[] = {
-        L".fit", L".fits", L".xisf",
-        L".nef", L".nrw", L".cr2", L".arw", L".sr2",
-        L".dng", L".pef", L".srw", L".iiq",
-    };
-    for (const wchar_t* e : kExts)
-        if (::_wcsicmp(ext, e) == 0) return true;
-    return false;
+    return ext_in(ext, kFitsExts) || ext_in(ext, kXisfExts) || ext_in(ext, kRawExts);
 }
 
 // Enumerate sibling astro files in the directory of `path`, natural-sorted
@@ -1168,12 +1187,23 @@ void ViewerWindow::on_open_dialog() {
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd_;
-    ofn.lpstrFilter =
-        L"Astro images\0*.fit;*.fits;*.xisf;*.nef;*.nrw;*.cr2;*.arw;*.sr2;*.dng;*.pef;*.srw;*.iiq\0"
-        L"FITS\0*.fit;*.fits\0"
-        L"XISF\0*.xisf\0"
-        L"Camera RAW\0*.nef;*.nrw;*.cr2;*.arw;*.sr2;*.dng;*.pef;*.srw;*.iiq\0"
-        L"All files\0*.*\0";
+    // Built from the kFitsExts/kXisfExts/kRawExts single source above. The
+    // filter is a sequence of "label\0pattern\0" pairs, double-null terminated.
+    const std::wstring fits = ext_globs(kFitsExts);
+    const std::wstring xisf = ext_globs(kXisfExts);
+    const std::wstring raw  = ext_globs(kRawExts);
+    std::wstring filter;
+    auto add_group = [&](const wchar_t* label, const std::wstring& pat) {
+        filter.append(label);     filter.push_back(L'\0');
+        filter.append(pat);       filter.push_back(L'\0');
+    };
+    add_group(L"Astro images", fits + L';' + xisf + L';' + raw);
+    add_group(L"FITS", fits);
+    add_group(L"XISF", xisf);
+    add_group(L"Camera RAW", raw);
+    add_group(L"All files", L"*.*");
+    filter.push_back(L'\0');   // final terminator
+    ofn.lpstrFilter = filter.c_str();
     ofn.lpstrFile = buf;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
