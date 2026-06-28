@@ -3,6 +3,7 @@
 #include "fits_image.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace fitsx {
 
@@ -34,9 +35,71 @@ struct AnalysisResult {
 // v2: a regression in PropertyHandler caused 0-star analyses to be cached
 //     for FITS after the XISF refactor (run_analysis was being called on a
 //     moved-from image). Bump to invalidate those bogus entries.
-constexpr int kAnalysisSchemaVersion = 2;
+// v3: robust star detector (local-background mesh + roundness/sharpness/SNR
+//     cuts, saturation-aware) replaced the global median+5sigma + 4..200px
+//     filter. Star counts / HFR / eccentricity all shift, so old rows must go.
+constexpr int kAnalysisSchemaVersion = 3;
 
 [[nodiscard]] AnalysisResult run_analysis(const FitsImage& img);
+
+// ---------------------------------------------------------------------------
+//  Detailed (per-star) analysis -- the foundation for the inspection tools
+//  (star overlay, tilt map, aberration vectors). run_analysis keeps returning
+//  cheap medians for the cache / Explorer columns; this returns the full star
+//  list and is computed on demand by the viewer, never cached.
+// ---------------------------------------------------------------------------
+
+// One detected star, in display-image pixel coordinates (top-left origin, the
+// same space the renderer draws the bitmap in -- so overlays map 1:1).
+struct DetectedStar {
+    float x = 0.0f;       // flux-weighted centroid X
+    float y = 0.0f;       // flux-weighted centroid Y
+    float flux = 0.0f;    // background-subtracted integrated flux
+    float hfr = 0.0f;     // half-flux radius (px)
+    float fwhm = 0.0f;    // px, from second moments
+    float ecc = 0.0f;     // eccentricity 0 (round) .. ->1 (elongated)
+    float theta = 0.0f;   // major-axis orientation, radians; atan2 convention
+                          // in image space (y grows downward)
+};
+
+struct DetailedAnalysis {
+    bool success = false;
+    int  width = 0;
+    int  height = 0;
+    double background = 0.0;   // median (detection floor)
+    double threshold = 0.0;    // median + 5*sigma_mad
+    std::vector<DetectedStar> stars;
+};
+
+[[nodiscard]] DetailedAnalysis run_detailed_analysis(const FitsImage& img);
+
+// ---------------------------------------------------------------------------
+//  Tilt map -- bins the detected stars into a grid x grid mesh and reports
+//  median HFR per cell. Sensor / focuser tilt shows as a sharp corner opposite
+//  a soft one. Pure function of a DetailedAnalysis so it is unit-testable.
+// ---------------------------------------------------------------------------
+
+struct TiltCell {
+    int    count = 0;          // stars binned into this cell
+    double hfr_median = 0.0;   // 0 when count == 0
+    double ecc_mean = 0.0;
+};
+
+struct TiltResult {
+    bool success = false;
+    int  grid = 0;                  // grid x grid cells, row-major in `cells`
+    std::vector<TiltCell> cells;
+    double hfr_min = 0.0;           // across populated cells
+    double hfr_max = 0.0;
+    double tilt_pct = 0.0;          // (max-min)/min * 100 over the 4 corner cells
+    double curvature_pct = 0.0;     // (mean corners - center)/center * 100; 0 if
+                                    // the centre cell is empty. >0 => corners
+                                    // softer than centre (field curvature).
+    int    best_corner = -1;        // 0=TL 1=TR 2=BL 3=BR (lowest corner HFR)
+    int    worst_corner = -1;       // highest corner HFR
+};
+
+[[nodiscard]] TiltResult compute_tilt(const DetailedAnalysis& a, int grid = 3);
 
 // Stable 64-bit FNV-1a hash of (first 8 KB of buffer || size_be). Returned as
 // 16 lowercase hex characters. Used as the analysis-cache primary key — a

@@ -11,6 +11,8 @@ add_library(fits_core STATIC
     src/xisf_loader.cpp
     src/raw_loader.cpp
     src/analysis.cpp
+    src/psf.cpp
+    src/background.cpp
     src/cache.cpp
 )
 
