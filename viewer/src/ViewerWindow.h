@@ -15,11 +15,15 @@
 #include "fits_core/fits_image.h"
 #include "fits_core/fits_render.h"
 #include "fits_core/fits_stretch.h"
+#include "fits_core/analysis.h"
 
 #include "HeaderView.h"
 #include "AnalysisView.h"
 #include "Toolbar.h"
 #include "Histogram.h"
+#include "AberrationView.h"
+#include "TiltView.h"
+#include "BackgroundView.h"
 
 class ViewerWindow {
 public:
@@ -63,6 +67,29 @@ private:
     void on_open_dialog();
     void on_command(int id);
 
+    // Inspection tools. The toolbar's Inspect button pops this menu; toggling
+    // any overlay lazily kicks a detailed (per-star) analysis on the worker.
+    void show_inspect_menu();
+    void ensure_detailed();           // request detailed analysis if not ready
+    void refresh_tilt_window();       // push the current tilt result if open
+    void push_aberration();           // push frame (+stars) to the inspector if open
+    void push_background();           // compute + push the background map if open
+    // On-image overlay (star markers) drawn in draw_overlays().
+    bool any_overlay_active() const noexcept {
+        return show_stars_;
+    }
+    // Anything that consumes the per-star analysis (star overlay + tilt popup).
+    // The aberration inspector's measured mode runs its own PSF plate, so it is
+    // independent of this.
+    bool needs_detailed() const noexcept {
+        return any_overlay_active() || tilt_window_.is_visible();
+    }
+    // Map an image-space pixel (px,py) to a viewport screen point, honoring the
+    // current zoom/pan and 90/180/270 rotation. Used to place overlays exactly
+    // on top of the rendered bitmap.
+    D2D1_POINT_2F image_to_screen(float px, float py) const;
+    void draw_overlays();             // called from render(), after DrawBitmap
+
     void zoom_to_fit();
     void set_zoom(float factor, int anchor_x, int anchor_y);
     void clamp_offset();
@@ -75,6 +102,18 @@ private:
     HeaderView headers_;
     Toolbar toolbar_;
     HistogramWindow histogram_;
+    AberrationWindow aberration_;
+    TiltWindow       tilt_window_;
+    BackgroundWindow background_window_;
+
+    // Inspection toggles + the detailed per-star analysis they consume.
+    // detailed_ is recomputed on the worker the first time something needs it
+    // for the current image, then reused; cleared on every new load. Star
+    // markers are an on-image overlay; tilt is its own popup window.
+    bool show_stars_ = false;
+    std::shared_ptr<const fitsx::DetailedAnalysis> detailed_;
+    bool detail_pending_ = false;     // a detailed analysis is in flight
+    const fitsx::FitsImage* bg_for_ = nullptr;   // image the background map was built for
 
     ID2D1Factory* d2d_factory_ = nullptr;
     ID2D1HwndRenderTarget* rt_ = nullptr;
@@ -84,6 +123,13 @@ private:
     // first paint, released with the render target.
     ID2D1SolidColorBrush* veil_brush_   = nullptr;
     ID2D1SolidColorBrush* spinner_brush_= nullptr;
+
+    // Inspection-overlay drawing resources. overlay_brush_ is RT-bound (its
+    // colour is reset per primitive); the DirectWrite objects are device-
+    // independent and created once. All lazily initialized in draw_overlays().
+    ID2D1SolidColorBrush*  overlay_brush_ = nullptr;   // released with the RT
+    struct IDWriteFactory*    dwrite_factory_ = nullptr;
+    struct IDWriteTextFormat* overlay_text_   = nullptr;
 
     // shared_ptr so an in-flight render worker can keep using the previous
     // image safely when the user navigates to the next file mid-render.
@@ -127,9 +173,13 @@ private:
     void worker_main();
     void request_load (const std::wstring& path);
     void request_render(const fitsx::StretchParams& p);
+    void request_detail();
 
     struct RenderResult;
     void on_render_finished(std::uint64_t gen, RenderResult* r);
+
+    struct DetailResult;
+    void on_detail_finished(std::uint64_t gen, DetailResult* r);
 
     std::thread             worker_thread_;
     std::mutex              worker_mtx_;
@@ -148,8 +198,14 @@ private:
     fitsx::StretchParams                       pending_render_params_{};
     std::uint64_t                              pending_render_gen_     = 0;
 
+    // detail slot (per-star inspection analysis)
+    bool                                       pending_detail_         = false;
+    std::shared_ptr<const fitsx::FitsImage>    pending_detail_img_;
+    std::uint64_t                              pending_detail_gen_     = 0;
+
     // UI-visible atomic mirrors -- on_*_finished compares the result's gen
     // against the latest to drop stale results.
     std::atomic<std::uint64_t> load_gen_latest_  {0};
     std::atomic<std::uint64_t> render_gen_latest_{0};
+    std::atomic<std::uint64_t> detail_gen_latest_{0};
 };

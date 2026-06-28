@@ -21,6 +21,7 @@ constexpr int kCmd_StretchAuto    = 110;
 constexpr int kCmd_PrevFile       = 111;
 constexpr int kCmd_NextFile       = 112;
 constexpr int kCmd_ToggleHistogram= 113;
+constexpr int kCmd_Inspect        = 114;
 
 constexpr int kButtonW = 44;
 constexpr int kButtonH = 44;  // matches Toolbar::kHeight so buttons fill the bar
@@ -79,6 +80,7 @@ constexpr ButtonSpec kButtons[] = {
     { kCmd_StretchNone,     L"RAW",    L"No stretch (linear, 0..max)",      true,  true },
     { kCmd_StretchAuto,     L"Auto",   L"Auto stretch (PixInsight AutoSTF)", true, true },
     { kCmd_ToggleHistogram, L"\xE9D9", L"Histogram + stretch sliders (Ctrl+H)", false, true },
+    { kCmd_Inspect,         L"\xE7B3", L"Inspection tools (stars / tilt / aberration)", false, false },
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_ToggleAnalysis,  L"\xE9F9", L"Show / hide measurements (A)",     false, true },
     { kCmd_ToggleHeaders,   L"\xE946", L"Show / hide FITS headers (H)",     false, true },

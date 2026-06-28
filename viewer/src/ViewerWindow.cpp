@@ -2,10 +2,12 @@
 
 #include "fits_core/fits_loader.h"
 #include "fits_core/analysis.h"
+#include "fits_core/background.h"
 #include "fits_core/cache.h"
 
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <dwrite.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <uxtheme.h>
@@ -190,11 +192,19 @@ constexpr int kCmd_StretchAuto    = 110;
 constexpr int kCmd_PrevFile       = 111;
 constexpr int kCmd_NextFile       = 112;
 constexpr int kCmd_ToggleHistogram= 113;
+// Inspection tools. kCmd_Inspect opens the dropdown; the rest are its items.
+constexpr int kCmd_Inspect        = 114;
+constexpr int kCmd_InspectStars   = 115;
+constexpr int kCmd_InspectTilt    = 116;
+constexpr int kCmd_InspectPanel   = 118;
+constexpr int kCmd_InspectBackground = 119;
 
 // Worker → UI postback. wParam = generation, lParam = ViewerWindow::LoadResult*.
 constexpr UINT  WM_APP_LOAD_DONE   = WM_APP + 1;
 // Render worker → UI postback. lParam = ViewerWindow::RenderResult*.
 constexpr UINT  WM_APP_RENDER_DONE = WM_APP + 2;
+// Detailed-analysis worker → UI postback. lParam = ViewerWindow::DetailResult*.
+constexpr UINT  WM_APP_DETAIL_DONE = WM_APP + 3;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -343,6 +353,11 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
         apply_stretch();
     });
 
+    aberration_.create(hwnd_, hinst);
+    aberration_.set_on_layout_changed([this] { push_aberration(); });
+    tilt_window_.create(hwnd_, hinst);
+    background_window_.create(hwnd_, hinst);
+
     worker_thread_ = std::thread([this] { worker_main(); });
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
@@ -401,7 +416,12 @@ int ViewerWindow::run_message_loop() {
     if (worker_thread_.joinable()) worker_thread_.join();
 
     histogram_.destroy();
+    aberration_.destroy();
+    tilt_window_.destroy();
+    background_window_.destroy();
     release_render_target();
+    safe_release(overlay_text_);
+    safe_release(dwrite_factory_);
     safe_release(d2d_factory_);
     return static_cast<int>(msg.wParam);
 }
@@ -480,6 +500,10 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_APP_RENDER_DONE:
             self->on_render_finished(0, reinterpret_cast<RenderResult*>(lp));
             return 0;
+        case WM_APP_DETAIL_DONE:
+            self->on_detail_finished(static_cast<std::uint64_t>(wp),
+                                     reinterpret_cast<DetailResult*>(lp));
+            return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
             ::PostQuitMessage(0);
@@ -519,6 +543,7 @@ void ViewerWindow::release_render_target() {
     safe_release(bitmap_);
     safe_release(veil_brush_);
     safe_release(spinner_brush_);
+    safe_release(overlay_brush_);
     safe_release(rt_);
 }
 
@@ -609,26 +634,38 @@ struct ViewerWindow::RenderResult {
     fitsx::RenderedBitmap rendered;
 };
 
+// Posted from the worker for a completed detailed (per-star) analysis -- the
+// foundation for the inspection overlays. Computed on demand, never cached.
+struct ViewerWindow::DetailResult {
+    std::uint64_t           gen = 0;
+    fitsx::DetailedAnalysis detail;
+};
+
 // Unified worker. Sleeps on worker_cv_, wakes when pending_load_ or
 // pending_render_ is set (or on shutdown via worker_quit_). Load takes
 // priority over render so a file switch always supersedes a slider drag
 // on the previous file.
 void ViewerWindow::worker_main() {
     for (;;) {
-        bool do_load = false, do_render = false;
+        bool do_load = false, do_render = false, do_detail = false;
         std::wstring                                 load_path;
         StretchMode                                  load_mode = StretchMode::Auto;
         std::uint64_t                                load_gen = 0;
         std::shared_ptr<const fitsx::FitsImage>      render_img;
         fitsx::StretchParams                         render_params{};
         std::uint64_t                                render_gen = 0;
+        std::shared_ptr<const fitsx::FitsImage>      detail_img;
+        std::uint64_t                                detail_gen = 0;
 
         {
             std::unique_lock<std::mutex> lk(worker_mtx_);
             worker_cv_.wait(lk, [this] {
-                return worker_quit_ || pending_load_ || pending_render_;
+                return worker_quit_ || pending_load_ || pending_render_ || pending_detail_;
             });
             if (worker_quit_) return;
+            // Priority: load (file switch) > detail (inspection) > render
+            // (slider). A fresh navigation always supersedes pending work on
+            // the previous file.
             if (pending_load_) {
                 do_load           = true;
                 load_path         = std::move(pending_load_path_);
@@ -636,6 +673,12 @@ void ViewerWindow::worker_main() {
                 load_gen          = pending_load_gen_;
                 pending_load_     = false;
                 pending_load_path_.clear();
+            } else if (pending_detail_) {
+                do_detail         = true;
+                detail_img        = pending_detail_img_;
+                detail_gen        = pending_detail_gen_;
+                pending_detail_   = false;
+                pending_detail_img_.reset();
             } else if (pending_render_) {
                 do_render         = true;
                 render_img        = pending_render_img_;
@@ -684,6 +727,14 @@ void ViewerWindow::worker_main() {
             ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
                            static_cast<WPARAM>(load_gen),
                            reinterpret_cast<LPARAM>(result.release()));
+        } else if (do_detail) {
+            if (!detail_img || detail_img->data.empty()) continue;
+            auto* out = new DetailResult{};
+            out->gen    = detail_gen;
+            out->detail = fitsx::run_detailed_analysis(*detail_img);
+            ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
+                           static_cast<WPARAM>(detail_gen),
+                           reinterpret_cast<LPARAM>(out));
         } else if (do_render) {
             if (!render_img || render_img->data.empty()) continue;
             auto* out = new RenderResult{};
@@ -728,8 +779,76 @@ void ViewerWindow::on_render_finished(std::uint64_t /*unused*/, RenderResult* ra
 
     rendered_ = std::move(r->rendered);
     safe_release(bitmap_);
+    // The aberration inspector samples the rendered pixels, so keep its crops
+    // in sync with the latest stretch while it is open.
+    push_aberration();
     // No zoom/offset reset -- params change shouldn't disturb the user's pan.
     invalidate_viewport();
+}
+
+void ViewerWindow::request_detail() {
+    if (!image_) return;
+    const std::uint64_t gen =
+        detail_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        pending_detail_     = true;
+        pending_detail_img_ = image_;
+        pending_detail_gen_ = gen;
+    }
+    detail_pending_ = true;
+    worker_cv_.notify_one();
+}
+
+// Kick a detailed analysis if an overlay needs one and we don't have it yet.
+void ViewerWindow::ensure_detailed() {
+    if (!image_) return;
+    if (detailed_ || detail_pending_) return;   // ready or already in flight
+    request_detail();
+}
+
+void ViewerWindow::on_detail_finished(std::uint64_t gen, DetailResult* raw) {
+    std::unique_ptr<DetailResult> r(raw);
+    // Drop stale results (user navigated to another file mid-analysis).
+    if (gen != detail_gen_latest_.load(std::memory_order_relaxed)) return;
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+
+    detail_pending_ = false;
+    detailed_ = std::make_shared<const fitsx::DetailedAnalysis>(std::move(r->detail));
+    // Overlays consume detailed_; repaint now that the data is available.
+    if (any_overlay_active()) invalidate_viewport();
+    refresh_tilt_window();
+}
+
+// Recompute the tilt result from the current detailed analysis and push it to
+// the popup (no-op if the popup is hidden or the analysis isn't ready yet).
+void ViewerWindow::refresh_tilt_window() {
+    if (!tilt_window_.is_visible()) return;
+    tilt_window_.set_rotation(rotation_deg_);
+    if (detailed_) tilt_window_.set_tilt(fitsx::compute_tilt(*detailed_, 3));
+    else           tilt_window_.clear();
+}
+
+// Push the current rendered frame (and, for the measured "Inspected" mode, the
+// per-star analysis) to the aberration inspector. Kicks a detailed analysis if
+// inspected mode needs one that isn't ready yet.
+void ViewerWindow::push_aberration() {
+    if (!aberration_.is_visible()) return;
+    aberration_.set_rotation(rotation_deg_);   // match the on-screen orientation
+    aberration_.set_image(image_);       // Inspecté: PSF plate from the linear image
+    aberration_.set_source(rendered_);   // Visuel: crops from the rendered frame
+}
+
+// Compute the sky-background map (linear image, stretch-independent) and push it
+// to the popup. Recomputes only when the image actually changed.
+void ViewerWindow::push_background() {
+    if (!background_window_.is_visible()) return;
+    background_window_.set_rotation(rotation_deg_);   // mirror the on-screen orientation
+    if (!image_) { background_window_.clear(); bg_for_ = nullptr; return; }
+    if (image_.get() != bg_for_) {
+        background_window_.set_map(fitsx::compute_background(*image_));
+        bg_for_ = image_.get();
+    }
 }
 
 void ViewerWindow::load_file(const wchar_t* path) {
@@ -778,6 +897,19 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     analysis_.update(r->analysis);
     histogram_.set_image(image_);          // shared_ptr; histogram defers bin
     histogram_.set_params(stretch_);        // computation until popup is shown
+
+    // New image: the previous per-star analysis is stale. Bump the detail
+    // generation so any in-flight worker result is dropped, forget the old
+    // data, then re-request if an overlay is currently on.
+    detail_gen_latest_.fetch_add(1, std::memory_order_relaxed);
+    detailed_.reset();
+    detail_pending_ = false;
+    if (needs_detailed()) ensure_detailed();
+    tilt_window_.clear();          // old tilt is stale until the new analysis lands
+    // Refresh the aberration crops from the freshly rendered frame if open.
+    push_aberration();
+    bg_for_ = nullptr;             // new image -> recompute the background map
+    push_background();
 
     zoom_to_fit();
     update_title();
@@ -912,6 +1044,10 @@ void ViewerWindow::render() {
         if (rotation_deg_ != 0) {
             rt_->SetTransform(D2D1::Matrix3x2F::Identity());
         }
+
+        // Inspection overlays (stars / tilt / aberration vectors) sit on top of
+        // the bitmap, mapped through the same zoom/pan/rotation.
+        if (!loading_ && any_overlay_active()) draw_overlays();
     }
 
     // While a load is in flight, dim the viewport and draw an 8-dot spinner
@@ -1125,6 +1261,9 @@ void ViewerWindow::on_command(int id) {
             clamp_offset();
             update_title();
             invalidate_viewport();
+            push_aberration();          // keep the inspectors' orientation in sync
+            push_background();
+            refresh_tilt_window();
             ::SetFocus(hwnd_);
             break;
         }
@@ -1133,6 +1272,9 @@ void ViewerWindow::on_command(int id) {
             clamp_offset();
             update_title();
             invalidate_viewport();
+            push_aberration();
+            push_background();
+            refresh_tilt_window();
             ::SetFocus(hwnd_);
             break;
         }
@@ -1154,6 +1296,30 @@ void ViewerWindow::on_command(int id) {
             ::SetFocus(hwnd_);
             break;
         }
+        case kCmd_Inspect:
+            show_inspect_menu();
+            break;
+        case kCmd_InspectStars:
+            show_stars_ = !show_stars_;
+            if (show_stars_) ensure_detailed();
+            invalidate_viewport();
+            ::SetFocus(hwnd_);
+            break;
+        case kCmd_InspectTilt:
+            tilt_window_.toggle();
+            if (tilt_window_.is_visible()) { ensure_detailed(); refresh_tilt_window(); }
+            ::SetFocus(hwnd_);
+            break;
+        case kCmd_InspectPanel:
+            aberration_.toggle();
+            push_aberration();
+            ::SetFocus(hwnd_);
+            break;
+        case kCmd_InspectBackground:
+            background_window_.toggle();
+            push_background();
+            ::SetFocus(hwnd_);
+            break;
         case kCmd_FitToWindow:
             zoom_to_fit(); update_title(); invalidate_viewport(); break;
         case kCmd_Zoom100:
@@ -1172,6 +1338,127 @@ void ViewerWindow::on_command(int id) {
             break;
         }
     }
+}
+
+void ViewerWindow::show_inspect_menu() {
+    HMENU menu = ::CreatePopupMenu();
+    if (!menu) return;
+
+    const bool have = (image_ != nullptr);
+    auto item = [&](int id, const wchar_t* text, bool checked) {
+        UINT flags = MF_STRING;
+        if (checked)  flags |= MF_CHECKED;
+        if (!have)    flags |= MF_GRAYED;
+        ::AppendMenuW(menu, flags, static_cast<UINT_PTR>(id), text);
+    };
+    item(kCmd_InspectStars, L"Star markers",        show_stars_);
+    item(kCmd_InspectTilt,  L"Tilt diagram…",       tilt_window_.is_visible());
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    item(kCmd_InspectPanel,      L"Aberration inspector…", aberration_.is_visible());
+    item(kCmd_InspectBackground, L"Background map…",        background_window_.is_visible());
+
+    // Drop the menu just below the toolbar's Inspect button.
+    POINT pt{};
+    HWND tb = toolbar_.hwnd();
+    RECT br{};
+    if (tb && ::SendMessageW(tb, TB_GETRECT, kCmd_Inspect,
+                             reinterpret_cast<LPARAM>(&br))) {
+        pt.x = br.left;
+        pt.y = br.bottom;
+        ::ClientToScreen(tb, &pt);
+    } else {
+        ::GetCursorPos(&pt);
+    }
+    // No TPM_RETURNCMD -> the selection is posted as WM_COMMAND to hwnd_, which
+    // routes through on_command() like every other command.
+    ::TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+                     pt.x, pt.y, 0, hwnd_, nullptr);
+    ::DestroyMenu(menu);
+    ::SetFocus(hwnd_);
+}
+
+// Map an image-space pixel to a viewport screen point, replicating render()'s
+// zoom/pan transform (and the 90/180/270 rotation matrix) so overlays land
+// exactly on the rendered bitmap.
+D2D1_POINT_2F ViewerWindow::image_to_screen(float px, float py) const {
+    const RECT vpr = viewport_rect();
+    const float view_w = static_cast<float>(rendered_.width)  * zoom_;
+    const float view_h = static_cast<float>(rendered_.height) * zoom_;
+    const float vp_w = static_cast<float>(vpr.right - vpr.left);
+    const float vp_h = static_cast<float>(vpr.bottom - vpr.top);
+    const float cx = vpr.left + vp_w * 0.5f - offset_x_ * zoom_;
+    const float cy = vpr.top  + vp_h * 0.5f - offset_y_ * zoom_;
+    float sx = (cx - view_w * 0.5f) + px * zoom_;
+    float sy = (cy - view_h * 0.5f) + py * zoom_;
+    if (rotation_deg_ != 0) {
+        const float rad = static_cast<float>(rotation_deg_) * 3.14159265358979f / 180.0f;
+        const float ca = std::cos(rad), sa = std::sin(rad);
+        const float dx = sx - cx, dy = sy - cy;
+        sx = cx + dx * ca - dy * sa;
+        sy = cy + dx * sa + dy * ca;
+    }
+    return D2D1::Point2F(sx, sy);
+}
+
+namespace {
+// HFR-quality colour ramp: green (tight) -> amber -> red (bloated). t in [0,1].
+D2D1::ColorF quality_color(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    // 0 -> green (0.30,0.85,0.40), 0.5 -> amber (0.98,0.78,0.20),
+    // 1 -> red (0.95,0.30,0.25). Two-segment linear blend.
+    float r, g, b;
+    if (t < 0.5f) {
+        const float u = t / 0.5f;
+        r = 0.30f + u * (0.98f - 0.30f);
+        g = 0.85f + u * (0.78f - 0.85f);
+        b = 0.40f + u * (0.20f - 0.40f);
+    } else {
+        const float u = (t - 0.5f) / 0.5f;
+        r = 0.98f + u * (0.95f - 0.98f);
+        g = 0.78f + u * (0.30f - 0.78f);
+        b = 0.20f + u * (0.25f - 0.20f);
+    }
+    return D2D1::ColorF(r, g, b);
+}
+}  // namespace
+
+void ViewerWindow::draw_overlays() {
+    if (!rt_ || !detailed_ || !detailed_->success) return;
+
+    // Lazily build the shared overlay brush (RT-bound) and the DirectWrite text
+    // format (device-independent, created once).
+    if (!overlay_brush_) {
+        rt_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &overlay_brush_);
+    }
+    if (!dwrite_factory_) {
+        ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                              reinterpret_cast<IUnknown**>(&dwrite_factory_));
+    }
+    if (dwrite_factory_ && !overlay_text_) {
+        dwrite_factory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            12.0f, L"en-us", &overlay_text_);
+    }
+    if (!overlay_brush_) return;
+
+    const auto& stars = detailed_->stars;
+
+    // ---- Star markers: circle per star, radius ~ HFR, colour ~ eccentricity.
+    if (show_stars_ && !stars.empty()) {
+        for (const auto& s : stars) {
+            const D2D1_POINT_2F p = image_to_screen(s.x, s.y);
+            // Radius tracks HFR but stays legible: 2*HFR in image px, scaled by
+            // zoom, clamped so faint and giant stars are both visible.
+            float r = 2.0f * s.hfr * zoom_;
+            r = std::clamp(r, 3.0f, 40.0f);
+            overlay_brush_->SetColor(quality_color(s.ecc));   // round=green, elongated=red
+            overlay_brush_->SetOpacity(0.9f);
+            rt_->DrawEllipse(D2D1::Ellipse(p, r, r), overlay_brush_, 1.4f);
+        }
+        overlay_brush_->SetOpacity(1.0f);
+    }
+
 }
 
 void ViewerWindow::on_drop(HDROP drop) {
