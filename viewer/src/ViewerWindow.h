@@ -124,12 +124,9 @@ private:
     ID2D1SolidColorBrush* veil_brush_   = nullptr;
     ID2D1SolidColorBrush* spinner_brush_= nullptr;
 
-    // Inspection-overlay drawing resources. overlay_brush_ is RT-bound (its
-    // colour is reset per primitive); the DirectWrite objects are device-
-    // independent and created once. All lazily initialized in draw_overlays().
+    // Inspection-overlay brush. RT-bound (its colour is reset per primitive),
+    // lazily initialized in draw_overlays().
     ID2D1SolidColorBrush*  overlay_brush_ = nullptr;   // released with the RT
-    struct IDWriteFactory*    dwrite_factory_ = nullptr;
-    struct IDWriteTextFormat* overlay_text_   = nullptr;
 
     // shared_ptr so an in-flight render worker can keep using the previous
     // image safely when the user navigates to the next file mid-render.

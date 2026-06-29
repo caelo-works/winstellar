@@ -1,5 +1,7 @@
 #include "fits_core/analysis.h"
 
+#include "fits_core/pixmath.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -31,14 +33,8 @@ struct PixelStats {
     uint64_t max_count = 0;
 };
 
-// Rec.601 luma weights. For RGB images (debayered CFA or color XISF) all
-// pixel statistics and star detection run on luma rather than the red channel
-// alone -- red is typically the faintest channel in astro frames, so HFR /
-// star counts off R-only would be unreliable. Mono images read `data` directly.
-inline float luma_at(const FitsImage& img, size_t i) noexcept {
-    if (!img.is_rgb()) return img.data[i];
-    return 0.299f * img.data[i] + 0.587f * img.data_g[i] + 0.114f * img.data_b[i];
-}
+// luma_at() (Rec.601) lives in fits_core/pixmath.h -- shared with the PSF and
+// background tools so all three agree on what "brightness" means.
 
 PixelStats compute_pixel_stats(const FitsImage& img) {
     PixelStats s;

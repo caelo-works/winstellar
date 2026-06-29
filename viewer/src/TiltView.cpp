@@ -1,5 +1,7 @@
 #include "TiltView.h"
 
+#include "InspectColor.h"
+
 #include <dwmapi.h>
 #include <dwrite.h>
 
@@ -28,23 +30,8 @@ int src_cell(int dr, int dc, int rot) {
     return sr * 3 + sc;
 }
 
-// HFR quality ramp: green (sharp) -> amber -> red (soft). t in [0,1].
-D2D1::ColorF quality_color(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    float r, g, b;
-    if (t < 0.5f) {
-        const float u = t / 0.5f;
-        r = 0.30f + u * (0.98f - 0.30f);
-        g = 0.85f + u * (0.78f - 0.85f);
-        b = 0.40f + u * (0.20f - 0.40f);
-    } else {
-        const float u = (t - 0.5f) / 0.5f;
-        r = 0.98f + u * (0.95f - 0.98f);
-        g = 0.78f + u * (0.30f - 0.78f);
-        b = 0.20f + u * (0.25f - 0.20f);
-    }
-    return D2D1::ColorF(r, g, b);
-}
+// quality_color() (HFR green->amber->red ramp) lives in InspectColor.h, shared
+// with the on-image star markers.
 
 }  // namespace
 
