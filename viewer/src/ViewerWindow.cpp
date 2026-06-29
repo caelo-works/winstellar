@@ -1,5 +1,7 @@
 #include "ViewerWindow.h"
 
+#include "InspectColor.h"
+
 #include "fits_core/fits_loader.h"
 #include "fits_core/analysis.h"
 #include "fits_core/background.h"
@@ -7,7 +9,6 @@
 
 #include <commdlg.h>
 #include <dwmapi.h>
-#include <dwrite.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <uxtheme.h>
@@ -420,8 +421,6 @@ int ViewerWindow::run_message_loop() {
     tilt_window_.destroy();
     background_window_.destroy();
     release_render_target();
-    safe_release(overlay_text_);
-    safe_release(dwrite_factory_);
     safe_release(d2d_factory_);
     return static_cast<int>(msg.wParam);
 }
@@ -1400,45 +1399,12 @@ D2D1_POINT_2F ViewerWindow::image_to_screen(float px, float py) const {
     return D2D1::Point2F(sx, sy);
 }
 
-namespace {
-// HFR-quality colour ramp: green (tight) -> amber -> red (bloated). t in [0,1].
-D2D1::ColorF quality_color(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    // 0 -> green (0.30,0.85,0.40), 0.5 -> amber (0.98,0.78,0.20),
-    // 1 -> red (0.95,0.30,0.25). Two-segment linear blend.
-    float r, g, b;
-    if (t < 0.5f) {
-        const float u = t / 0.5f;
-        r = 0.30f + u * (0.98f - 0.30f);
-        g = 0.85f + u * (0.78f - 0.85f);
-        b = 0.40f + u * (0.20f - 0.40f);
-    } else {
-        const float u = (t - 0.5f) / 0.5f;
-        r = 0.98f + u * (0.95f - 0.98f);
-        g = 0.78f + u * (0.30f - 0.78f);
-        b = 0.20f + u * (0.25f - 0.20f);
-    }
-    return D2D1::ColorF(r, g, b);
-}
-}  // namespace
-
 void ViewerWindow::draw_overlays() {
     if (!rt_ || !detailed_ || !detailed_->success) return;
 
-    // Lazily build the shared overlay brush (RT-bound) and the DirectWrite text
-    // format (device-independent, created once).
+    // Lazily build the shared overlay brush (RT-bound).
     if (!overlay_brush_) {
         rt_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &overlay_brush_);
-    }
-    if (!dwrite_factory_) {
-        ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                              reinterpret_cast<IUnknown**>(&dwrite_factory_));
-    }
-    if (dwrite_factory_ && !overlay_text_) {
-        dwrite_factory_->CreateTextFormat(
-            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            12.0f, L"en-us", &overlay_text_);
     }
     if (!overlay_brush_) return;
 

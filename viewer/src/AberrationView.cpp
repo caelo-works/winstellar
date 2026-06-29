@@ -1,5 +1,7 @@
 #include "AberrationView.h"
 
+#include "fits_core/pixmath.h"
+
 #include <dwmapi.h>
 #include <dwrite.h>
 #include <commctrl.h>
@@ -39,11 +41,7 @@ constexpr int kBaseTile = 178;   // initial on-screen tile size (3x3)
 template <typename T>
 void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
-inline float luma_at(const fitsx::FitsImage& img, int x, int y) {
-    const size_t i = static_cast<size_t>(y) * img.width + x;
-    if (!img.is_rgb()) return img.data[i];
-    return 0.299f * img.data[i] + 0.587f * img.data_g[i] + 0.114f * img.data_b[i];
-}
+// luma_at(img, x, y) comes from fits_core/pixmath.h (found via ADL on FitsImage).
 
 // asinh-normalised grayscale stamp -> BGRA (his asinh_norm). cut x cut.
 void asinh_stamp(const fitsx::FitsImage& img, int ox, int oy, int cut,

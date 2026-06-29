@@ -1,5 +1,7 @@
 #include "fits_core/background.h"
 
+#include "fits_core/pixmath.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,12 +14,6 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr int    kRows = 48, kCols = 72;   // GRID_ROWS, GRID_COLS
 constexpr int    kRings = 12;
-
-inline float luma_at(const FitsImage& img, int x, int y) {
-    const size_t i = static_cast<size_t>(y) * img.width + x;
-    if (!img.is_rgb()) return img.data[i];
-    return 0.299f * img.data[i] + 0.587f * img.data_g[i] + 0.114f * img.data_b[i];
-}
 
 double quantile(std::vector<float>& v, double q) {
     if (v.empty()) return 0.0;

@@ -1,5 +1,7 @@
 #include "fits_core/psf.h"
 
+#include "fits_core/pixmath.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -14,12 +16,6 @@ constexpr double kSnrMin   = 15.0;
 constexpr double kConcMin  = 0.12;
 constexpr int    kLocalK   = 7;           // local-maximum window
 constexpr double kDetSig   = 10.0;        // detect threshold = med + 10*sigma
-
-inline float luma_at(const FitsImage& img, int x, int y) {
-    const size_t i = static_cast<size_t>(y) * img.width + x;
-    if (!img.is_rgb()) return img.data[i];
-    return 0.299f * img.data[i] + 0.587f * img.data_g[i] + 0.114f * img.data_b[i];
-}
 
 double median_inplace(std::vector<float>& v) {
     if (v.empty()) return 0.0;
