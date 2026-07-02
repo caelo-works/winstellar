@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Keep the CI workflow's third-party actions current (and, once they are
+  # SHA-pinned, Dependabot bumps the pin + comment together).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "security"
+      - "dependencies"
+    commit-message:
+      prefix: "ci"
+
+# Note: the C/C++ dependencies (cfitsio, libraw, pugixml, sqlite3, ...) are
+# pinned via the vcpkg "builtin-baseline" in vcpkg.json. Dependabot has no
+# native vcpkg ecosystem, so that baseline must be bumped manually — periodically
+# advance it and re-run the build to pick up upstream security fixes.
