@@ -147,7 +147,7 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
     float nulval = 0.0f;
     status = 0;
     if (fits_read_pix(fptr, TFLOAT, fpixel,
-                      static_cast<long>(npix) * planes_to_read,
+                      static_cast<LONGLONG>(npix) * planes_to_read,
                       &nulval, raw.data(), &anynul, &status) != 0) {
         return finish_with_error(fptr, status, "fits_read_pix: ");
     }
@@ -257,9 +257,12 @@ LoadResult load_from_file(const wchar_t* utf16_path) {
         res.error = "Failed to open file";
         return res;
     }
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); res.error = "fseek failed"; return res; }
-    long sz = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
+    // 64-bit size: std::ftell returns a 32-bit long on Windows, so a file >= 2 GB
+    // (real for stacked masters / large mosaics) would wrap negative and be
+    // rejected as "Empty file". Use _fseeki64/_ftelli64.
+    if (_fseeki64(f, 0, SEEK_END) != 0) { std::fclose(f); res.error = "fseek failed"; return res; }
+    const long long sz = _ftelli64(f);
+    _fseeki64(f, 0, SEEK_SET);
     if (sz <= 0) { std::fclose(f); res.error = "Empty file"; return res; }
 
     std::vector<uint8_t> buf(static_cast<size_t>(sz));
