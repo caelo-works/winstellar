@@ -639,31 +639,44 @@ TiltResult compute_tilt(const DetailedAnalysis& a, int grid) {
 //  Cache key — FNV-1a 64-bit over (head8K || size_be).
 // ---------------------------------------------------------------------------
 
+// Number of leading bytes folded into the cache key. Callers MUST sample the
+// same prefix or their keys won't match: the property handler (in Explorer) and
+// the viewer's from-file path both hash this many bytes + the true file size, so
+// the viewer-populated cache is readable by Explorer (see #34). Kept small so it
+// stays O(1) per file when scrolling a folder.
+constexpr size_t kCacheKeySampleBytes = 64 * 1024;
+
 std::string compute_cache_key(const void* buffer, size_t size) noexcept {
-    constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
-    constexpr uint64_t kFnvPrime  = 0x100000001b3ull;
+    constexpr uint64_t kFnvPrime = 0x100000001b3ull;
+    // Two decorrelated FNV-1a lanes -> a 128-bit key. A single 64-bit FNV is
+    // only ~2^32 (birthday) collision-resistant, which made a targeted prefix+
+    // size collision (cache poisoning) plausible; 128 bits raises that bar far
+    // out of reach for a display-metadata cache. Lane 2 uses a different seed
+    // and a byte transform + rotation so it can't track lane 1.
+    uint64_t h1 = 0xcbf29ce484222325ull;
+    uint64_t h2 = 0x9e3779b97f4a7c15ull;
 
     const auto* p = static_cast<const uint8_t*>(buffer);
-    const size_t take = std::min<size_t>(size, 8 * 1024);
-
-    uint64_t h = kFnvOffset;
+    const size_t take = std::min<size_t>(size, kCacheKeySampleBytes);
     for (size_t i = 0; i < take; ++i) {
-        h ^= p[i];
-        h *= kFnvPrime;
+        h1 ^= p[i];
+        h1 *= kFnvPrime;
+        h2 ^= static_cast<uint8_t>(p[i] ^ 0xA5u) + i;
+        h2 *= kFnvPrime;
+        h2 = (h2 << 13) | (h2 >> 51);      // rotate for cross-lane diffusion
     }
-    // Mix the size in big-endian so the suffix is content-agnostic.
+    // Fold the true size into both lanes (big-endian), content-agnostic suffix.
     for (int sh = 56; sh >= 0; sh -= 8) {
-        h ^= static_cast<uint8_t>((size >> sh) & 0xFFu);
-        h *= kFnvPrime;
+        const uint8_t b = static_cast<uint8_t>((static_cast<uint64_t>(size) >> sh) & 0xFFu);
+        h1 ^= b; h1 *= kFnvPrime;
+        h2 ^= b; h2 *= kFnvPrime;
     }
 
-    char out[17] = {0};
+    char out[33] = {0};
     static const char hex[] = "0123456789abcdef";
-    for (int i = 15; i >= 0; --i) {
-        out[i] = hex[h & 0xFu];
-        h >>= 4;
-    }
-    return std::string(out, 16);
+    for (int i = 15; i >= 0; --i) { out[i]      = hex[h1 & 0xFu]; h1 >>= 4; }
+    for (int i = 15; i >= 0; --i) { out[16 + i] = hex[h2 & 0xFu]; h2 >>= 4; }
+    return std::string(out, 32);
 }
 
 std::string compute_cache_key_from_file(const wchar_t* utf16_path) {
@@ -674,10 +687,13 @@ std::string compute_cache_key_from_file(const wchar_t* utf16_path) {
     const long sz = std::ftell(f);
     if (sz <= 0) { std::fclose(f); return {}; }
     std::fseek(f, 0, SEEK_SET);
-    uint8_t head[8192] = {};   // zero-init; small files leave the tail at 0
-    std::fread(head, 1, sizeof(head), f);
+    // Sample the same prefix compute_cache_key folds in (kCacheKeySampleBytes),
+    // so this key matches the one the Explorer property handler derives for the
+    // same file. Heap-allocated (64 KB is too large for the stack).
+    std::vector<uint8_t> head(kCacheKeySampleBytes, 0);
+    std::fread(head.data(), 1, head.size(), f);
     std::fclose(f);
-    return compute_cache_key(head, static_cast<size_t>(sz));
+    return compute_cache_key(head.data(), static_cast<size_t>(sz));
 }
 
 }  // namespace fitsx

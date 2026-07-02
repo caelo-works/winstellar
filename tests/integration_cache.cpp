@@ -1,11 +1,14 @@
 #include "fits_core/cache.h"
+#include "fits_core/analysis.h"
 
 #include <gtest/gtest.h>
 
 #include <windows.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -96,4 +99,43 @@ TEST(AnalysisCache, StoreOverwritesPrior) {
     auto got = c.lookup(key);
     ASSERT_TRUE(got.has_value());
     EXPECT_EQ(got->star_count, 99);
+}
+
+// --- compute_cache_key (128-bit, prefix+size) ------------------------------
+
+TEST(CacheKey, IsDeterministicAnd32Hex) {
+    std::vector<uint8_t> a(1000);
+    for (size_t i = 0; i < a.size(); ++i) a[i] = static_cast<uint8_t>(i * 31 + 7);
+    const std::string k1 = fitsx::compute_cache_key(a.data(), a.size());
+    const std::string k2 = fitsx::compute_cache_key(a.data(), a.size());
+    EXPECT_EQ(k1, k2);
+    EXPECT_EQ(k1.size(), 32u);
+    EXPECT_EQ(k1.find_first_not_of("0123456789abcdef"), std::string::npos);
+}
+
+TEST(CacheKey, MatchesAcrossCallersSharingPrefixAndSize) {
+    // The property handler passes a large buffer + true size; the viewer's
+    // from-file path passes only the sampled prefix + true size. Both must
+    // derive the SAME key so the viewer-populated cache is readable in Explorer.
+    const size_t file_size = 5'000'000;                 // pretend the file is 5 MB
+    std::vector<uint8_t> big(200 * 1024);               // handler view (>64 KB)
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i * 13);
+    std::vector<uint8_t> head(64 * 1024);               // from-file view (prefix)
+    std::copy(big.begin(), big.begin() + head.size(), head.begin());
+
+    const std::string k_handler  = fitsx::compute_cache_key(big.data(),  file_size);
+    const std::string k_fromfile = fitsx::compute_cache_key(head.data(), file_size);
+    EXPECT_EQ(k_handler, k_fromfile);
+}
+
+TEST(CacheKey, ChangesWithSizeAndContent) {
+    std::vector<uint8_t> a(2000, 0x11);
+    const std::string base = fitsx::compute_cache_key(a.data(), 2000);
+
+    // Same bytes, different declared size.
+    EXPECT_NE(base, fitsx::compute_cache_key(a.data(), 2001));
+
+    // Same size, one byte flipped within the sampled prefix.
+    a[123] = 0x12;
+    EXPECT_NE(base, fitsx::compute_cache_key(a.data(), 2000));
 }
