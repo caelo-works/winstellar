@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -182,16 +183,39 @@ LoadResult load_xisf_from_memory(const void* buffer, size_t size) {
     const size_t bps = bytes_per_sample(h.sample_format);
     if (bps == 0) { out.error = "Unsupported sampleFormat"; return out; }
 
-    const size_t npix          = static_cast<size_t>(h.width) *
-                                 static_cast<size_t>(h.height);
-    const size_t channel_bytes = npix * bps;
+    // Reject non-positive geometry before casting to size_t: a negative int
+    // becomes an enormous size_t and would poison every size computation below.
+    if (h.width <= 0 || h.height <= 0) {
+        out.error = "Non-positive XISF geometry";
+        return out;
+    }
+    const size_t npix = static_cast<size_t>(h.width) *
+                        static_cast<size_t>(h.height);
+
     // RGB XISF stores R, G, B planes contiguously after pixel_offset. Load
     // all three when the file declares RGB; otherwise fall back to the
     // single-plane mono path. Mono / Gray + multi-channel "Gray" XISFs both
     // come out as 1 plane.
     const bool rgb = h.color_rgb && h.channels == 3;
     const size_t planes_to_load = rgb ? 3u : 1u;
-    if (h.pixel_offset + planes_to_load * channel_bytes > size) {
+
+    // Overflow-safe bounds check. pixel_offset and the geometry come straight
+    // from the file; the naive `pixel_offset + planes*channel_bytes > size` can
+    // wrap 64-bit arithmetic (offset near 2^64, or npix*bps overflowing) and let
+    // a wild pointer slip past the guard into convert_plane(). Check each
+    // multiply with a division, and compare the offset against `size - need`
+    // rather than adding.
+    if (bps != 0 && npix > SIZE_MAX / bps) {
+        out.error = "XISF pixel geometry overflows";
+        return out;
+    }
+    const size_t channel_bytes = npix * bps;
+    if (channel_bytes != 0 && planes_to_load > SIZE_MAX / channel_bytes) {
+        out.error = "XISF pixel geometry overflows";
+        return out;
+    }
+    const size_t need = planes_to_load * channel_bytes;
+    if (h.pixel_offset > size || need > size - h.pixel_offset) {
         out.error = "Buffer truncated before pixel data end (need full file)";
         return out;
     }

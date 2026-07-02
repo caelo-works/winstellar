@@ -67,6 +67,36 @@ TEST(XisfLoad, LoadsThreeRgbPlanes) {
     EXPECT_DOUBLE_EQ(res.image.source_max, 1000.0);
 }
 
+// Hand-assemble an XISF with a chosen `location` string so we can inject a
+// hostile attachment offset the synth helper would never produce.
+static std::vector<uint8_t> make_xisf_with_location(const std::string& location) {
+    const std::string xml =
+        "<xisf version=\"1.0\"><Image geometry=\"4:4:1\" sampleFormat=\"Float32\" "
+        "colorSpace=\"Gray\" location=\"" + location + "\"/></xisf>";
+    std::vector<uint8_t> buf;
+    buf.insert(buf.end(), {'X','I','S','F','0','1','0','0'});
+    uint32_t len = static_cast<uint32_t>(xml.size());
+    for (int i = 0; i < 4; ++i) buf.push_back((len >> (8 * i)) & 0xFF);
+    buf.insert(buf.end(), {0, 0, 0, 0});                    // reserved
+    buf.insert(buf.end(), xml.begin(), xml.end());
+    buf.resize(buf.size() + 256, 0);                         // room for pixels
+    return buf;
+}
+
+TEST(XisfLoad, RejectsOverflowingPixelOffset) {
+    // pixel_offset near 2^64: the old `offset + planes*channel_bytes > size`
+    // wrapped to a small value and passed, handing convert_plane a wild pointer.
+    auto buf = make_xisf_with_location("attachment:18446744073709551600:16");
+    auto res = load_xisf_from_memory(buf.data(), buf.size());
+    EXPECT_FALSE(res.success);   // must fail cleanly, no OOB read / crash
+}
+
+TEST(XisfLoad, RejectsOffsetPastBuffer) {
+    auto buf = make_xisf_with_location("attachment:100000:64");
+    auto res = load_xisf_from_memory(buf.data(), buf.size());
+    EXPECT_FALSE(res.success);
+}
+
 TEST(XisfLoad, EndToEndMonoFloat32) {
     // Build a 4x4 image where each pixel == its 0-based index, then verify
     // the pixel data round-trips through load_xisf_from_memory.
