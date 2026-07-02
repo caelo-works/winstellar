@@ -127,7 +127,15 @@ std::optional<AnalysisResult> AnalysisCache::lookup(std::string_view key) {
                       SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt_lookup_, 2, kAnalysisSchemaVersion);
 
-    if (sqlite3_step(stmt_lookup_) != SQLITE_ROW) return std::nullopt;
+    if (sqlite3_step(stmt_lookup_) != SQLITE_ROW) {
+        // Release the read transaction/snapshot promptly. Leaving the statement
+        // in a stepped state pins a WAL read-mark: in a long-lived host
+        // (explorer.exe / SearchIndexer.exe) that may never call lookup again,
+        // it blocks WAL checkpointing for every process sharing the DB, so the
+        // -wal file grows without bound.
+        sqlite3_reset(stmt_lookup_);
+        return std::nullopt;
+    }
 
     AnalysisResult r;
     int col = 0;
@@ -145,6 +153,10 @@ std::optional<AnalysisResult> AnalysisCache::lookup(std::string_view key) {
     r.min_count          = static_cast<uint64_t>(sqlite3_column_int64(stmt_lookup_, col++));
     r.max_value          = sqlite3_column_double(stmt_lookup_, col++);
     r.max_count          = static_cast<uint64_t>(sqlite3_column_int64(stmt_lookup_, col++));
+
+    // Done reading the row -- reset now so we don't hold the WAL read snapshot
+    // open until the next lookup() call (see the SQLITE_ROW-miss path above).
+    sqlite3_reset(stmt_lookup_);
     return r;
 }
 
@@ -175,7 +187,12 @@ void AnalysisCache::store(std::string_view key, const AnalysisResult& r) {
     sqlite3_bind_double(stmt_upsert_, i++, r.max_value);
     sqlite3_bind_int64(stmt_upsert_, i++, static_cast<sqlite3_int64>(r.max_count));
 
-    sqlite3_step(stmt_upsert_);
+    // Best-effort write: a BUSY/error just means this row isn't cached this time
+    // (the viewer recomputes on the next open). Reset regardless so the
+    // statement is reusable and no write lock lingers on the shared DB.
+    const int rc = sqlite3_step(stmt_upsert_);
+    (void)rc;
+    sqlite3_reset(stmt_upsert_);
 }
 
 }  // namespace fitsx
