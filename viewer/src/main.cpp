@@ -19,18 +19,26 @@ int run_check(const wchar_t* path) {
         std::fwprintf(stderr, L"--check requires a file path\n");
         return 1;
     }
-    auto loaded = fitsx::load_from_file(path);
-    if (!loaded.success) {
-        std::fwprintf(stderr, L"load failed: %hs\n", loaded.error.c_str());
+    try {
+        auto loaded = fitsx::load_from_file(path);
+        if (!loaded.success) {
+            std::fwprintf(stderr, L"load failed: %hs\n", loaded.error.c_str());
+            return 1;
+        }
+        auto ar = fitsx::run_analysis(loaded.image);
+        std::wprintf(L"OK %dx%d headers=%zu min=%.3f max=%.3f stars=%d hfr=%.2f\n",
+                     loaded.image.width, loaded.image.height,
+                     loaded.image.headers.size(),
+                     loaded.image.source_min, loaded.image.source_max,
+                     ar.star_count, ar.hfr_median);
+        return 0;
+    } catch (const std::exception& e) {
+        std::fwprintf(stderr, L"load failed (exception): %hs\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fwprintf(stderr, L"load failed (unknown exception)\n");
         return 1;
     }
-    auto ar = fitsx::run_analysis(loaded.image);
-    std::wprintf(L"OK %dx%d headers=%zu min=%.3f max=%.3f stars=%d hfr=%.2f\n",
-                 loaded.image.width, loaded.image.height,
-                 loaded.image.headers.size(),
-                 loaded.image.source_min, loaded.image.source_max,
-                 ar.star_count, ar.hfr_median);
-    return 0;
 }
 
 }  // namespace

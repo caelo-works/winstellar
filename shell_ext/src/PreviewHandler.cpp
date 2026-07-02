@@ -163,43 +163,53 @@ void FitsPreviewHandler::load_and_render() {
         return;
     }
 
-    auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
-    if (!loaded.success) {
-        render_failed_ = true;
-        error_text_ = L"Failed to parse FITS";
-        return;
-    }
+    // Runs in-process in explorer.exe; a malformed file can throw from the
+    // loaders (bad_alloc / length_error on header-driven sizing). Contain it and
+    // show the error state instead of letting the exception crash the host.
+    try {
+        auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
+        if (!loaded.success) {
+            render_failed_ = true;
+            error_text_ = L"Failed to parse FITS";
+            return;
+        }
 
-    const auto stretch = fitsx::compute_auto_stretch(loaded.image);
-    // Preview pane is typically <= 600px wide; render at native then let StretchBlt downscale.
-    constexpr int kPreviewMaxDim = 1024;
-    auto bmp = fitsx::render_to_bgra(loaded.image, stretch, kPreviewMaxDim, kPreviewMaxDim);
-    if (bmp.width <= 0 || bmp.height <= 0) {
-        render_failed_ = true;
-        error_text_ = L"Empty render";
-        return;
-    }
+        const auto stretch = fitsx::compute_auto_stretch(loaded.image);
+        // Preview pane is typically <= 600px wide; render at native then let StretchBlt downscale.
+        constexpr int kPreviewMaxDim = 1024;
+        auto bmp = fitsx::render_to_bgra(loaded.image, stretch, kPreviewMaxDim, kPreviewMaxDim);
+        if (bmp.width <= 0 || bmp.height <= 0) {
+            render_failed_ = true;
+            error_text_ = L"Empty render";
+            return;
+        }
 
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = bmp.width;
-    bi.bmiHeader.biHeight = -bmp.height;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = bmp.width;
+        bi.bmiHeader.biHeight = -bmp.height;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
 
-    void* bits = nullptr;
-    HBITMAP h = ::CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!h || !bits) {
-        if (h) ::DeleteObject(h);
+        void* bits = nullptr;
+        HBITMAP h = ::CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!h || !bits) {
+            if (h) ::DeleteObject(h);
+            render_failed_ = true;
+            error_text_ = L"DIB allocation failed";
+            return;
+        }
+        memcpy(bits, bmp.bgra.data(), bmp.bgra.size());
+        bitmap_ = h;
+        bmp_w_ = bmp.width;
+        bmp_h_ = bmp.height;
+    } catch (...) {
+        if (bitmap_) { ::DeleteObject(bitmap_); bitmap_ = nullptr; }
+        bmp_w_ = bmp_h_ = 0;
         render_failed_ = true;
-        error_text_ = L"DIB allocation failed";
-        return;
+        error_text_ = L"Malformed or unreadable file";
     }
-    memcpy(bits, bmp.bgra.data(), bmp.bgra.size());
-    bitmap_ = h;
-    bmp_w_ = bmp.width;
-    bmp_h_ = bmp.height;
 }
 
 IFACEMETHODIMP FitsPreviewHandler::Initialize(IStream* stream, DWORD /*grfMode*/) {

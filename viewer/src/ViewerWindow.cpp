@@ -692,55 +692,68 @@ void ViewerWindow::worker_main() {
             auto result = std::make_unique<LoadResult>();
             result->path = load_path;
 
-            auto loaded = fitsx::load_from_file(load_path.c_str());
-            if (!loaded.success) {
-                result->success = false;
-                result->error   = std::move(loaded.error);
-                ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
-                               static_cast<WPARAM>(load_gen),
-                               reinterpret_cast<LPARAM>(result.release()));
-                continue;
-            }
-            result->image = std::move(loaded.image);
-            // Compute auto-stretch once and stash it on the image so the UI
-            // thread's RAW <-> Auto toggle is instant.
-            const fitsx::StretchParams auto_p = fitsx::compute_auto_stretch(result->image);
-            result->image.auto_stretch = auto_p;
-            result->stretch  = (load_mode == StretchMode::Auto) ? auto_p
-                                                                : fitsx::StretchParams{};
-            result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
-
-            const std::string ckey = fitsx::compute_cache_key_from_file(load_path.c_str());
-            if (!ckey.empty()) {
-                if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
-                    result->analysis = *cached;
+            // A malformed/corrupt file can throw from the loaders or analysis
+            // (bad_alloc / length_error on header-driven sizing). An exception
+            // escaping worker_main() would unwind out of the std::thread and
+            // std::terminate the process, so contain it and post a failure.
+            try {
+                auto loaded = fitsx::load_from_file(load_path.c_str());
+                if (!loaded.success) {
+                    result->success = false;
+                    result->error   = std::move(loaded.error);
                 } else {
-                    result->analysis = fitsx::run_analysis(result->image);
-                    fitsx::AnalysisCache::instance().store(ckey, result->analysis);
+                    result->image = std::move(loaded.image);
+                    // Compute auto-stretch once and stash it on the image so the
+                    // UI thread's RAW <-> Auto toggle is instant.
+                    const fitsx::StretchParams auto_p =
+                        fitsx::compute_auto_stretch(result->image);
+                    result->image.auto_stretch = auto_p;
+                    result->stretch  = (load_mode == StretchMode::Auto)
+                                           ? auto_p : fitsx::StretchParams{};
+                    result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
+
+                    const std::string ckey =
+                        fitsx::compute_cache_key_from_file(load_path.c_str());
+                    if (!ckey.empty()) {
+                        if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey);
+                            cached.has_value()) {
+                            result->analysis = *cached;
+                        } else {
+                            result->analysis = fitsx::run_analysis(result->image);
+                            fitsx::AnalysisCache::instance().store(ckey, result->analysis);
+                        }
+                    } else {
+                        result->analysis = fitsx::run_analysis(result->image);
+                    }
+                    result->success = true;
                 }
-            } else {
-                result->analysis = fitsx::run_analysis(result->image);
+            } catch (...) {
+                result->success = false;
+                result->error   = "Failed to load file (malformed or out of memory)";
             }
-            result->success = true;
 
             ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
                            static_cast<WPARAM>(load_gen),
                            reinterpret_cast<LPARAM>(result.release()));
         } else if (do_detail) {
             if (!detail_img || detail_img->data.empty()) continue;
-            auto* out = new DetailResult{};
-            out->gen    = detail_gen;
-            out->detail = fitsx::run_detailed_analysis(*detail_img);
-            ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
-                           static_cast<WPARAM>(detail_gen),
-                           reinterpret_cast<LPARAM>(out));
+            try {
+                auto out = std::make_unique<DetailResult>();
+                out->gen    = detail_gen;
+                out->detail = fitsx::run_detailed_analysis(*detail_img);
+                ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
+                               static_cast<WPARAM>(detail_gen),
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop the overlay analysis rather than crash */ }
         } else if (do_render) {
             if (!render_img || render_img->data.empty()) continue;
-            auto* out = new RenderResult{};
-            out->gen      = render_gen;
-            out->rendered = fitsx::render_to_bgra(*render_img, render_params);
-            ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
-                           reinterpret_cast<LPARAM>(out));
+            try {
+                auto out = std::make_unique<RenderResult>();
+                out->gen      = render_gen;
+                out->rendered = fitsx::render_to_bgra(*render_img, render_params);
+                ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop this render tick rather than crash */ }
         }
     }
 }
