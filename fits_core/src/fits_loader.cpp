@@ -3,6 +3,7 @@
 #include "fits_core/fits_debayer.h"
 #include "fits_core/xisf_loader.h"
 #include "fits_core/raw_loader.h"
+#include "fits_core/image_limits.h"
 
 #include <fitsio.h>
 
@@ -96,8 +97,8 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
     status = 0;
     fits_get_img_param(fptr, 3, &bitpix, &naxis, naxes, &status);
     if (status != 0) return finish_with_error(fptr, status, "fits_get_img_param: ");
-    if (naxis < 2 || naxes[0] <= 0 || naxes[1] <= 0) {
-        res.error = "Image has invalid dimensions";
+    if (naxis < 2 || !dimensions_ok(naxes[0], naxes[1])) {
+        res.error = "Image has invalid or excessive dimensions";
         int s = 0; fits_close_file(fptr, &s);
         return res;
     }
