@@ -8,8 +8,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default: the build job runs on pull_request and builds
+# untrusted PR code with the workflow token, so it must not have write. The
+# `release` job re-grants `contents: write` for itself only.
 permissions:
-  contents: write   # required for the `release` job to attach assets to a tag
+  contents: read
 
 jobs:
   build:
@@ -18,17 +21,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0   # so the CMake git-info step can read full history
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1
         with:
           arch: x64
 
       - name: Set up vcpkg (manifest mode, baseline-pinned)
-        uses: lukka/run-vcpkg@v11
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2  # v11
         with:
           # Pulls vcpkg at the baseline SHA listed in vcpkg.json and enables
           # GitHub Actions binary caching automatically (cache key derived
@@ -67,7 +70,7 @@ jobs:
         run: ctest -C Release --output-on-failure --label-regex winstellar
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: WinStellar-bin
           path: |
@@ -95,7 +98,7 @@ jobs:
         run: ./installer/build_installer.ps1 -SkipBuild
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: WinStellarSetup
           path: build/installer/WinStellarSetup-*.exe
@@ -112,13 +115,13 @@ jobs:
 
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: WinStellarSetup
           path: ./dist
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: ./dist/WinStellarSetup-*.exe
           generate_release_notes: true   # auto changelog from PR titles since last tag
