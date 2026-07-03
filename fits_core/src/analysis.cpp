@@ -193,6 +193,34 @@ struct BgMesh {
         b = bilerp(bg);
         n = bilerp(noise);
     }
+
+    // Row-hoisted sampling for the detection hot loop. sample() recomputes the
+    // vertical setup (fy, j0, j1, ty) for every pixel, though it is constant
+    // along a scanline -- pure waste when called once per pixel over the whole
+    // image. set_row() computes it once; sample_row() does only the per-pixel
+    // horizontal work. The bilinear formula and operand order are IDENTICAL to
+    // sample(), so b/n are bit-for-bit the same and detection is unchanged.
+    struct RowState { int j0g, j1g; float ty; };
+    RowState set_row(float y) const {
+        const float fy = std::clamp(y / tile - 0.5f, 0.0f, static_cast<float>(gy - 1));
+        const int j0 = static_cast<int>(fy), j1 = std::min(j0 + 1, gy - 1);
+        return { j0 * gx, j1 * gx, fy - j0 };
+    }
+    void sample_row(const RowState& rs, float x, float& b, float& n) const {
+        const float fx = std::clamp(x / tile - 0.5f, 0.0f, static_cast<float>(gx - 1));
+        const int i0 = static_cast<int>(fx), i1 = std::min(i0 + 1, gx - 1);
+        const float tx = fx - i0;
+        auto bilerp = [&](const std::vector<float>& m) {
+            const float v00 = m[static_cast<size_t>(rs.j0g) + i0];
+            const float v10 = m[static_cast<size_t>(rs.j0g) + i1];
+            const float v01 = m[static_cast<size_t>(rs.j1g) + i0];
+            const float v11 = m[static_cast<size_t>(rs.j1g) + i1];
+            return (v00 * (1 - tx) + v10 * tx) * (1 - rs.ty)
+                 + (v01 * (1 - tx) + v11 * tx) * rs.ty;
+        };
+        b = bilerp(bg);
+        n = bilerp(noise);
+    }
 };
 
 // Sigma-clipped {median, 1.4826*MAD} over v (reordered in place); `dev` is a
@@ -301,11 +329,13 @@ std::vector<DetectedStar> detect_stars(const FitsImage& img) {
         const float* row   = img.data.data()   + roff;
         const float* row_g = rgb ? img.data_g.data() + roff : nullptr;
         const float* row_b = rgb ? img.data_b.data() + roff : nullptr;
+        // Vertical mesh interpolation is constant along the row -- hoist it.
+        const BgMesh::RowState rs = mesh.set_row(static_cast<float>(y));
         for (int x = 0; x < W; ++x) {
             const float lum = rgb ? (0.299f * row[x] + 0.587f * row_g[x] + 0.114f * row_b[x])
                                   : row[x];
             float b, n;
-            mesh.sample(static_cast<float>(x), static_cast<float>(y), b, n);
+            mesh.sample_row(rs, static_cast<float>(x), b, n);
             if (lum <= b + static_cast<float>(kThrSigma) * n) { curr_row[x] = -1; continue; }
 
             // 8-connected: NW, N, NE in prev row; W in curr row.
