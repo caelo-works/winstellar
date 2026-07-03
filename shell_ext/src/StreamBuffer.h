@@ -21,6 +21,10 @@ public:
                                                                   // for any real
                                                                   // XISF XML header
                                                                   // and any sane FITS
+    // Camera RAW carries its EXIF/TIFF metadata near the start; a few MB covers
+    // it, so the property handler needn't read tens of MB per NEF while Explorer
+    // scrolls a folder of them.
+    static constexpr size_t kRawHeaderCap = 4ull * 1024 * 1024;   // 4 MB
 
     HRESULT init(IStream* stream, size_t max_bytes = kHardCap);
     void clear() noexcept { buffer_.reset(); size_ = 0; total_size_ = 0; }

@@ -135,11 +135,16 @@ IFACEMETHODIMP FitsPropertyHandler::Initialize(IStream* stream, DWORD /*grfMode*
     clear_props();
     populated_ = false;
     buf_.clear();
-    // Header-only read: enough for any XISF XML header (max ~17 MB observed)
-    // and for the primary HDU of any sane FITS file. Avoids reading 850 MB
-    // of pixel data per file when Explorer scrolls a folder of huge XISF
-    // masters.
-    HRESULT hr = buf_.init(stream, StreamBuffer::kHeaderCap);
+    // Read only the useful part per format. Peek the magic first, then size the
+    // read: a camera RAW's EXIF is in the first few MB, so reading the 32 MB
+    // header cap for every NEF froze Explorer when scrolling a folder of them.
+    // XISF XML headers (up to ~17 MB) and FITS primary HDUs keep the full cap.
+    HRESULT hr = buf_.init(stream, 64 * 1024);   // magic only
+    if (FAILED(hr)) return hr;
+    size_t cap = StreamBuffer::kHeaderCap;
+    if (fitsx::detect_format(buf_.data(), buf_.size()) == fitsx::ImageFormat::Raw)
+        cap = StreamBuffer::kRawHeaderCap;
+    hr = buf_.init(stream, cap);
     if (FAILED(hr)) return hr;
     populate();
     populated_ = true;
@@ -175,6 +180,9 @@ void FitsPropertyHandler::populate() {
             // Camera RAW: pull EXIF only (no demosaic). Decoding a 24 Mpx
             // frame just to fill columns would choke Explorer when scrolling
             // a folder of NEFs; pixel stats / HFR are skipped for RAW in v1.
+            // 4 MB (kRawHeaderCap) covers the EXIF/TIFF IFDs of any real camera
+            // RAW; if a pathological file hid them further in, columns are simply
+            // dropped for that file rather than paying a 32 MB read on every NEF.
             auto m = fitsx::parse_raw_metadata(buf_.data(), buf_.size());
             if (!m.success) return;
             img.width = m.width;
