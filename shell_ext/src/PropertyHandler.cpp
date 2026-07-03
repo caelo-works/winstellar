@@ -156,8 +156,10 @@ void FitsPropertyHandler::populate() {
         // pixel decoding (the buffer is intentionally truncated to 32 MB
         // header-only mode by Initialize()).
         fitsx::FitsImage img;
+        // Set true only when we hold enough pixel data to compute HFR/stars in
+        // place. XISF/RAW stay header-only (lookup-only); FITS computes when the
+        // whole file fits in the 32 MB buffer (see the Fits case below).
         bool can_run_analysis = false;
-        fitsx::LoadResult loaded;
 
         switch (fitsx::detect_format(buf_.data(), buf_.size())) {
         case fitsx::ImageFormat::Xisf: {
@@ -181,10 +183,30 @@ void FitsPropertyHandler::populate() {
             break;
         }
         case fitsx::ImageFormat::Fits: {
-            loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
-            if (!loaded.success) return;
-            img = std::move(loaded.image);
-            can_run_analysis = true;
+            // Always emit metadata header-only, so columns show for EVERY FITS
+            // -- including frames whose pixels extend past the 32 MB buffer cap
+            // (a 26 Mpx 16-bit sub is ~52 MB, the common modern-CMOS case).
+            // Reading pixels used to fail on those and drop ALL columns.
+            auto md = fitsx::parse_fits_metadata(buf_.data(), buf_.size());
+            if (!md.success) return;
+            img.width   = md.width;
+            img.height  = md.height;
+            img.headers = std::move(md.headers);
+
+            // If the whole file fits in the buffer (<= 32 MB), decode pixels too
+            // and compute HFR/stars/stats in place, so the "sort by HFR in
+            // Explorer" workflow keeps working instantly on the common case.
+            // For > 32 MB frames the pixels aren't in the buffer, so analysis
+            // defers to the cache the standalone viewer populates on first open.
+            if (buf_.size() == buf_.total_size()) {
+                auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
+                if (loaded.success) {
+                    img = std::move(loaded.image);   // full image (pixels + headers)
+                    can_run_analysis = true;
+                }
+                // On the rare failure with a full buffer, keep the header-only
+                // metadata already emitted above.
+            }
             break;
         }
         }

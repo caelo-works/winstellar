@@ -217,6 +217,56 @@ ImageFormat detect_format(const void* buffer, size_t size) noexcept {
     return ImageFormat::Fits;
 }
 
+FitsMetadata parse_fits_metadata(const void* buffer, size_t size) {
+    FitsMetadata md;
+    if (!buffer || size == 0) { md.error = "Empty buffer"; return md; }
+
+    fitsfile* fptr = nullptr;
+    int status = 0;
+    void* mem = const_cast<void*>(buffer);
+    size_t mem_size = size;
+    if (fits_open_memfile(&fptr, "buffer.fits", READONLY,
+                          &mem, &mem_size, 0, nullptr, &status) != 0) {
+        md.error = "fits_open_memfile: " + format_status(status);
+        return md;
+    }
+
+    int hdunum = 0;
+    fits_get_num_hdus(fptr, &hdunum, &status);
+    int found = 0;
+    for (int i = 1; i <= hdunum; ++i) {
+        status = 0;
+        int hdutype = 0;
+        fits_movabs_hdu(fptr, i, &hdutype, &status);
+        if (status == 0 && hdutype == IMAGE_HDU) {
+            int naxis = 0;
+            status = 0;
+            fits_get_img_dim(fptr, &naxis, &status);
+            if (status == 0 && naxis >= 2) { found = i; break; }
+        }
+    }
+    if (!found) {
+        md.error = "No image HDU found in FITS file";
+        int s = 0; fits_close_file(fptr, &s);
+        return md;
+    }
+
+    int bitpix = 0, naxis = 0;
+    long naxes[3] = {0, 0, 0};
+    status = 0;
+    // Reads only the NAXIS* header cards -- no pixel access.
+    fits_get_img_param(fptr, 3, &bitpix, &naxis, naxes, &status);
+    if (status == 0 && naxis >= 2 && naxes[0] > 0 && naxes[1] > 0) {
+        md.width  = static_cast<int>(naxes[0]);
+        md.height = static_cast<int>(naxes[1]);
+    }
+    enumerate_headers(fptr, md.headers);   // keyword cards of the image HDU
+    md.success = true;
+
+    int s = 0; fits_close_file(fptr, &s);
+    return md;
+}
+
 LoadResult load_from_memory(const void* buffer, size_t size) {
     LoadResult res;
     if (!buffer || size == 0) {

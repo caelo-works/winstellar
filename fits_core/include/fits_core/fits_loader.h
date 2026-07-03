@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace fitsx {
 
@@ -12,6 +13,19 @@ struct LoadResult {
     std::string error;
     FitsImage image;
 };
+
+// Header-only FITS parse: dimensions + keywords, WITHOUT reading pixel data.
+// Cheap and bounded (reads only the header blocks), so it is safe to run in the
+// in-process Explorer property handler on the 32 MB-capped buffer even for
+// large frames whose pixels extend past the cap.
+struct FitsMetadata {
+    bool success = false;
+    int  width  = 0;
+    int  height = 0;
+    std::vector<FitsHeader> headers;
+    std::string error;
+};
+[[nodiscard]] FitsMetadata parse_fits_metadata(const void* buffer, size_t size);
 
 // Container format of an in-memory image buffer, decided by magic bytes.
 // Single source of truth for format priority so every dispatch site (the

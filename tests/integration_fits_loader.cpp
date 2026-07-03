@@ -207,3 +207,48 @@ TEST(FitsLoader, ReportsErrorOnNonFitsContent) {
     auto r = fitsx::load_from_file(f.utf16().c_str());
     EXPECT_FALSE(r.success);
 }
+
+namespace {
+std::vector<uint8_t> read_all_bytes(const std::wstring& path) {
+    FILE* fp = nullptr;
+    _wfopen_s(&fp, path.c_str(), L"rb");
+    if (!fp) return {};
+    fseek(fp, 0, SEEK_END);
+    long n = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    std::vector<uint8_t> b(n > 0 ? static_cast<size_t>(n) : 0);
+    if (!b.empty()) { size_t got = fread(b.data(), 1, b.size(), fp); b.resize(got); }
+    fclose(fp);
+    return b;
+}
+}  // namespace
+
+// parse_fits_metadata must return dimensions + keywords WITHOUT reading pixels,
+// and must keep working on a buffer truncated before the pixel data ends -- the
+// property handler caps its buffer at 32 MB, so large frames arrive header-only.
+TEST(FitsMetadata, HeaderOnlyParseSurvivesTruncation) {
+    TempFitsFile f("meta");
+    auto spec = wst::make_constant(40, 30, 7.0f);
+    spec.extra_keywords.emplace_back("OBJECT", "'M42'");
+    ASSERT_FALSE(wst::write_synth_fits(f.utf8(), spec).empty());
+
+    auto bytes = read_all_bytes(f.utf16());
+    ASSERT_GT(bytes.size(), 2880u);
+
+    // Full buffer.
+    auto full = fitsx::parse_fits_metadata(bytes.data(), bytes.size());
+    ASSERT_TRUE(full.success) << full.error;
+    EXPECT_EQ(full.width, 40);
+    EXPECT_EQ(full.height, 30);
+
+    // Truncated to the first header block only (drops all pixel data), which is
+    // exactly the >32 MB scenario. Metadata must still come through.
+    auto trunc = fitsx::parse_fits_metadata(bytes.data(), 2880);
+    ASSERT_TRUE(trunc.success) << trunc.error;
+    EXPECT_EQ(trunc.width, 40);
+    EXPECT_EQ(trunc.height, 30);
+    bool found_object = false;
+    for (const auto& h : trunc.headers)
+        if (h.key == "OBJECT") { found_object = true; break; }
+    EXPECT_TRUE(found_object) << "OBJECT keyword missing from header-only parse";
+}
