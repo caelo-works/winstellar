@@ -1,6 +1,7 @@
 #include "fits_core/psf.h"
 
 #include "fits_core/pixmath.h"
+#include "fits_core/stats.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,12 +18,7 @@ constexpr double kConcMin  = 0.12;
 constexpr int    kLocalK   = 7;           // local-maximum window
 constexpr double kDetSig   = 10.0;        // detect threshold = med + 10*sigma
 
-double median_inplace(std::vector<float>& v) {
-    if (v.empty()) return 0.0;
-    auto m = v.begin() + v.size() / 2;
-    std::nth_element(v.begin(), m, v.end());
-    return *m;
-}
+// median_inplace lives in fits_core/stats.h.
 
 // Block-mean local background, subtracted and clipped >= 0 (his highpass()).
 void highpass(const std::vector<float>& region, int h, int w, std::vector<float>& hp) {

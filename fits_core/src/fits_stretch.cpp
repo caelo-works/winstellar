@@ -1,4 +1,5 @@
 #include "fits_core/fits_stretch.h"
+#include "fits_core/stats.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,12 +9,7 @@ namespace fitsx {
 
 namespace {
 
-float median_in_place(std::vector<float>& v) {
-    if (v.empty()) return 0.0f;
-    auto mid = v.begin() + v.size() / 2;
-    std::nth_element(v.begin(), mid, v.end());
-    return *mid;
-}
+// median_inplace lives in fits_core/stats.h.
 
 }  // namespace
 
@@ -42,12 +38,12 @@ StretchParams compute_auto_stretch(const FitsImage& img) {
     if (samples.empty()) return p;
 
     std::vector<float> work = samples;
-    const float median = median_in_place(work);
+    const float median = median_inplace(work);
 
     std::vector<float> dev;
     dev.reserve(samples.size());
     for (float v : samples) dev.push_back(std::fabs(v - median));
-    const float mad = median_in_place(dev);
+    const float mad = median_inplace(dev);
 
     // PixInsight AutoSTF defaults: target background 0.25, shadows clip at -2.8 sigma.
     constexpr float kTargetBg = 0.25f;

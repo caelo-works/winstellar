@@ -1,6 +1,7 @@
 #include "fits_core/analysis.h"
 
 #include "fits_core/pixmath.h"
+#include "fits_core/stats.h"
 
 #include <algorithm>
 #include <array>
@@ -149,12 +150,7 @@ struct UnionFind {
     }
 };
 
-double median_of(std::vector<double>& v) {
-    if (v.empty()) return 0.0;
-    auto m = v.begin() + v.size() / 2;
-    std::nth_element(v.begin(), m, v.end());
-    return *m;
-}
+// median helpers live in fits_core/stats.h (median_inplace).
 
 // Flat per-above-threshold-pixel record. Replaces the per-blob {xs, ys, vs}
 // vector-of-vectors so star detection allocates O(detected pixels) rather
@@ -542,9 +538,9 @@ AnalysisResult summarize(const PixelStats& stats,
             fwhms.push_back(s.fwhm);
             eccs.push_back(s.ecc);
         }
-        r.hfr_median         = median_of(hfrs);
-        r.fwhm_median        = median_of(fwhms);
-        r.eccentricity_median = median_of(eccs);
+        r.hfr_median         = median_inplace(hfrs);
+        r.fwhm_median        = median_inplace(fwhms);
+        r.eccentricity_median = median_inplace(eccs);
 
         // HFR std-dev: classic SD over the star-by-star list.
         double sum = 0.0, sq = 0.0;
@@ -621,7 +617,7 @@ TiltResult compute_tilt(const DetailedAnalysis& a, int grid) {
         TiltCell& c = t.cells[i];
         c.count = static_cast<int>(hfr_by_cell[i].size());
         if (c.count > 0) {
-            c.hfr_median = median_of(hfr_by_cell[i]);
+            c.hfr_median = median_inplace(hfr_by_cell[i]);
             c.ecc_mean   = ecc_sum[i] / c.count;
             hmin = std::min(hmin, c.hfr_median);
             hmax = std::max(hmax, c.hfr_median);
