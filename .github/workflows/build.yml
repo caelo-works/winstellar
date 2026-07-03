@@ -120,10 +120,20 @@ jobs:
           name: WinStellarSetup
           path: ./dist
 
+      - name: Generate SHA-256 checksums
+        shell: bash
+        # Lets users verify the download wasn't tampered with in transit / on a
+        # mirror (the installer isn't code-signed yet). Published alongside it.
+        run: |
+          cd dist
+          sha256sum WinStellarSetup-*.exe | tee SHA256SUMS.txt
+
       - name: Publish release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
-          files: ./dist/WinStellarSetup-*.exe
+          files: |
+            ./dist/WinStellarSetup-*.exe
+            ./dist/SHA256SUMS.txt
           generate_release_notes: true   # auto changelog from PR titles since last tag
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}  # vX.Y.Z-beta1 → prerelease
