@@ -1,4 +1,5 @@
 #include "fits_core/xisf_loader.h"
+#include "fits_core/image_limits.h"
 
 #include <pugixml.hpp>
 
@@ -136,6 +137,11 @@ XisfParseResult parse_xisf_header(const void* buffer, size_t size) {
     const std::string geometry = img.attribute("geometry").as_string();
     if (!parse_geometry(geometry, h.width, h.height, h.channels)) {
         res.error = "Bad geometry attribute: " + geometry;
+        return res;
+    }
+    // Reject non-positive / absurd geometry before any pixel-buffer sizing.
+    if (!dimensions_ok(h.width, h.height, h.channels)) {
+        res.error = "Image dimensions out of range: " + geometry;
         return res;
     }
 

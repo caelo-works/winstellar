@@ -67,6 +67,41 @@ TEST(XisfLoad, LoadsThreeRgbPlanes) {
     EXPECT_DOUBLE_EQ(res.image.source_max, 1000.0);
 }
 
+// Hand-assemble an XISF buffer with an arbitrary geometry string, so we can
+// feed hostile dimensions the synth helper would never produce.
+static std::vector<uint8_t> make_xisf_with_geometry(const std::string& geometry) {
+    const std::string xml =
+        "<xisf version=\"1.0\"><Image geometry=\"" + geometry +
+        "\" sampleFormat=\"Float32\" colorSpace=\"Gray\" "
+        "location=\"attachment:64:16\"/></xisf>";
+    std::vector<uint8_t> buf;
+    buf.insert(buf.end(), {'X','I','S','F','0','1','0','0'});
+    uint32_t len = static_cast<uint32_t>(xml.size());
+    for (int i = 0; i < 4; ++i) buf.push_back((len >> (8 * i)) & 0xFF);
+    buf.insert(buf.end(), {0, 0, 0, 0});                       // reserved
+    buf.insert(buf.end(), xml.begin(), xml.end());
+    buf.resize(buf.size() + 256, 0);                            // room for pixels
+    return buf;
+}
+
+TEST(XisfHeader, RejectsOverLargeGeometry) {
+    // A tiny file declaring a ~4 exapixel image must be rejected up front, not
+    // drive a multi-terabyte allocation.
+    auto buf = make_xisf_with_geometry("2000000000:2000000000:1");
+    auto pr = fitsx::parse_xisf_header(buf.data(), buf.size());
+    EXPECT_FALSE(pr.success);
+    EXPECT_NE(pr.error.find("out of range"), std::string::npos) << pr.error;
+    // And the full load path must fail cleanly (no throw / no crash).
+    auto res = load_xisf_from_memory(buf.data(), buf.size());
+    EXPECT_FALSE(res.success);
+}
+
+TEST(XisfHeader, RejectsNonPositiveGeometry) {
+    auto buf = make_xisf_with_geometry("-4:4:1");
+    auto pr = fitsx::parse_xisf_header(buf.data(), buf.size());
+    EXPECT_FALSE(pr.success);
+}
+
 TEST(XisfLoad, EndToEndMonoFloat32) {
     // Build a 4x4 image where each pixel == its 0-based index, then verify
     // the pixel data round-trips through load_xisf_from_memory.
