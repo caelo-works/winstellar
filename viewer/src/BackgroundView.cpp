@@ -1,6 +1,7 @@
 #include "BackgroundView.h"
 
 #include "fits_core/stats.h"
+#include "InspectRotation.h"
 
 #include <dwmapi.h>
 #include <dwrite.h>
@@ -41,24 +42,7 @@ float percentile(std::vector<float> v, double q) {
 }
 
 // Rotate an R x C BGRA grid clockwise by rot; outputs rotated dims (dR,dC).
-void rotate_grid(const std::vector<uint8_t>& s, int R, int C, int rot,
-                 std::vector<uint8_t>& d, int& dR, int& dC) {
-    if (rot == 0) { d = s; dR = R; dC = C; return; }
-    if (rot == 180) { dR = R; dC = C; } else { dR = C; dC = R; }
-    d.resize(static_cast<size_t>(dR) * dC * 4);
-    for (int i = 0; i < dR; ++i)
-        for (int j = 0; j < dC; ++j) {
-            int sr, sc;
-            switch (rot) {
-                case 90:  sr = R - 1 - j; sc = i;         break;
-                case 180: sr = R - 1 - i; sc = C - 1 - j; break;
-                case 270: sr = j;         sc = C - 1 - i; break;
-                default:  sr = i;         sc = j;         break;
-            }
-            std::memcpy(&d[(static_cast<size_t>(i) * dC + j) * 4],
-                        &s[(static_cast<size_t>(sr) * C + sc) * 4], 4);
-        }
-}
+// rotate_grid -> rotate_grid_bgra in InspectRotation.h.
 
 }  // namespace
 
@@ -151,7 +135,7 @@ void BackgroundWindow::rebuild_heatmap() {
         base[i * 4 + 2] = r8;
         base[i * 4 + 3] = 255;
     }
-    rotate_grid(base, R, C, rot_, heat_bgra_, heat_h_, heat_w_);  // rows->h, cols->w
+    rotate_grid_bgra(base, R, C, rot_, heat_bgra_, heat_h_, heat_w_);  // rows->h, cols->w
 }
 
 void BackgroundWindow::init_d2d() {
