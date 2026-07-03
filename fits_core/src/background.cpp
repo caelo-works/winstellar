@@ -1,6 +1,7 @@
 #include "fits_core/background.h"
 
 #include "fits_core/pixmath.h"
+#include "fits_core/stats.h"
 
 #include <algorithm>
 #include <array>
@@ -15,28 +16,7 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr int    kRows = 48, kCols = 72;   // GRID_ROWS, GRID_COLS
 constexpr int    kRings = 12;
 
-double quantile(std::vector<float>& v, double q) {
-    if (v.empty()) return 0.0;
-    const size_t k = std::min(v.size() - 1,
-                              static_cast<size_t>(q * (v.size() - 1)));
-    std::nth_element(v.begin(), v.begin() + k, v.end());
-    return v[k];
-}
-
-double median_of(std::vector<double> v) {
-    if (v.empty()) return 0.0;
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    return v[v.size() / 2];
-}
-
-double mad_sigma(const std::vector<double>& v) {
-    if (v.empty()) return 1e-9;
-    const double m = median_of(v);
-    std::vector<double> d(v.size());
-    for (size_t i = 0; i < v.size(); ++i) d[i] = std::abs(v[i] - m);
-    const double s = 1.4826 * median_of(d);
-    return s > 0 ? s : 1e-9;
-}
+// quantile / median / mad_sigma live in fits_core/stats.h.
 
 // Solve a small weighted least squares c = argmin |W(A c - y)| via normal
 // equations (k x k Gaussian elimination). rows = basis vectors, keep = mask.
@@ -93,7 +73,7 @@ BackgroundMap compute_background(const FitsImage& img, int min_side) {
             for (int y = y0; y < y0 + by; ++y)
                 for (int x = x0; x < x0 + bx; ++x)
                     cell.push_back(luma_at(img, x, y));
-            B0[static_cast<size_t>(i) * C + j] = quantile(cell, 0.25);
+            B0[static_cast<size_t>(i) * C + j] = quantile_inplace(cell, 0.25);
         }
     }
 
@@ -147,7 +127,7 @@ BackgroundMap compute_background(const FitsImage& img, int min_side) {
 
     bg.rows = R; bg.cols = C;
     bg.surface.assign(surface.begin(), surface.end());
-    const double bg_med = median_of(surface);
+    const double bg_med = median_copy(surface);
     bg.bg_median = bg_med ? bg_med : 1e-6;
 
     // --- radial profile (rings) on the surface ---
@@ -159,7 +139,7 @@ BackgroundMap compute_background(const FitsImage& img, int min_side) {
         for (size_t k = 0; k < surface.size(); ++k)
             if (r[k] >= e0 && r[k] < e1) vals.push_back(surface[k]);
         if (vals.size() >= 3) {
-            prof[ri] = median_of(vals);
+            prof[ri] = median_copy(vals);
             double m = 0; for (double v : vals) m += v; m /= vals.size();
             double s = 0; for (double v : vals) s += (v - m) * (v - m);
             ring_std[ri] = std::sqrt(s / vals.size());
@@ -226,7 +206,7 @@ BackgroundMap compute_background(const FitsImage& img, int min_side) {
             for (int y = std::max(0, cy-hy); y < std::min(R, cy+hy+1); ++y)
                 for (int x = std::max(0, cx-hx); x < std::min(C, cx+hx+1); ++x)
                     v.push_back(resid[static_cast<size_t>(y)*C + x]);
-            return median_of(v) / sg;
+            return median_copy(v) / sg;
         };
         const double corners[4] = { patch_excess(0,0), patch_excess(0,1),
                                     patch_excess(1,0), patch_excess(1,1) };
@@ -239,7 +219,7 @@ BackgroundMap compute_background(const FitsImage& img, int min_side) {
             for (int y = std::max(0, cy-hy); y < std::min(R, cy+hy+1); ++y)
                 for (int x = std::max(0, cx-hx); x < std::min(C, cx+hx+1); ++x)
                     v.push_back(surface[static_cast<size_t>(y)*C + x]);
-            cs.push_back(median_of(v));
+            cs.push_back(median_copy(v));
         }
         double mean = 0; for (double v : cs) mean += v; mean /= cs.size();
         double s = 0; for (double v : cs) s += (v - mean) * (v - mean);

@@ -1,5 +1,7 @@
 #include "BackgroundView.h"
 
+#include "fits_core/stats.h"
+
 #include <dwmapi.h>
 #include <dwrite.h>
 
@@ -33,11 +35,9 @@ void magma(float t, uint8_t& R, uint8_t& G, uint8_t& B) {
     B = static_cast<uint8_t>(stops[i][2] * (1 - f) + stops[i + 1][2] * f);
 }
 
+// Thin by-value wrapper over the shared quantile helper.
 float percentile(std::vector<float> v, double q) {
-    if (v.empty()) return 0.0f;
-    const size_t k = std::min(v.size() - 1, static_cast<size_t>(q * (v.size() - 1)));
-    std::nth_element(v.begin(), v.begin() + k, v.end());
-    return v[k];
+    return fitsx::quantile_inplace(v, q);
 }
 
 // Rotate an R x C BGRA grid clockwise by rot; outputs rotated dims (dR,dC).
