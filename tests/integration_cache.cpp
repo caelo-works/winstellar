@@ -139,3 +139,63 @@ TEST(CacheKey, ChangesWithSizeAndContent) {
     a[123] = 0x12;
     EXPECT_NE(base, fitsx::compute_cache_key(a.data(), 2000));
 }
+
+TEST(MetadataCache, MissBeforeStore) {
+    auto& c = fitsx::AnalysisCache::instance();
+    auto r = c.lookup_metadata("ffffffffffffff01");
+    EXPECT_FALSE(r.has_value());
+}
+
+TEST(MetadataCache, RoundTripsWidthHeightAndHeaders) {
+    fitsx::CachedMetadata md;
+    md.width = 6024;
+    md.height = 4024;
+    md.headers = {
+        {"OBJECT",  "M 16 - Eagle Nebula", "target"},
+        {"FILTER",  "Ha", ""},
+        {"EXPTIME", "300.0", "[s] exposure"},
+        {"EMPTYVAL", "", "a comment but no value"},
+    };
+
+    auto& c = fitsx::AnalysisCache::instance();
+    const std::string_view key = "abcdef0123456701";
+    c.store_metadata(key, md);
+
+    auto got = c.lookup_metadata(key);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(got->width,  md.width);
+    EXPECT_EQ(got->height, md.height);
+    ASSERT_EQ(got->headers.size(), md.headers.size());
+    for (size_t i = 0; i < md.headers.size(); ++i) {
+        EXPECT_EQ(got->headers[i].key,     md.headers[i].key);
+        EXPECT_EQ(got->headers[i].value,   md.headers[i].value);
+        EXPECT_EQ(got->headers[i].comment, md.headers[i].comment);
+    }
+}
+
+TEST(MetadataCache, RoundTripsEmptyHeaderList) {
+    fitsx::CachedMetadata md;
+    md.width = 100; md.height = 50;   // no headers
+    auto& c = fitsx::AnalysisCache::instance();
+    const std::string_view key = "abcdef0123456702";
+    c.store_metadata(key, md);
+    auto got = c.lookup_metadata(key);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(got->width, 100);
+    EXPECT_EQ(got->height, 50);
+    EXPECT_TRUE(got->headers.empty());
+}
+
+TEST(MetadataCache, StoreOverwritesPrior) {
+    auto& c = fitsx::AnalysisCache::instance();
+    const std::string_view key = "abcdef0123456703";
+    c.store_metadata(key, {10, 20, {{"A", "1", ""}}});
+    c.store_metadata(key, {30, 40, {{"B", "2", ""}, {"C", "3", ""}}});
+    auto got = c.lookup_metadata(key);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(got->width, 30);
+    EXPECT_EQ(got->height, 40);
+    ASSERT_EQ(got->headers.size(), 2u);
+    EXPECT_EQ(got->headers[0].key, "B");
+    EXPECT_EQ(got->headers[1].key, "C");
+}

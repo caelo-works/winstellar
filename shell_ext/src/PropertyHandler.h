@@ -5,10 +5,13 @@
 #include <propsys.h>
 #include <propkey.h>
 
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "StreamBuffer.h"
+
+namespace fitsx { struct FitsImage; }
 
 class FitsPropertyHandler : public IInitializeWithStream,
                             public IPropertyStore,
@@ -39,7 +42,12 @@ private:
     ~FitsPropertyHandler();
 
     void clear_props();
-    void populate();
+    // Parse buf_ (the header read in Initialize) into img; false on parse fail.
+    bool parse_image(fitsx::FitsImage& img, bool& can_run_analysis);
+    // Emit all property columns from img (+ measurement columns via the cache
+    // under `key`). Runs whether img came from a fresh parse or the metadata cache.
+    void emit_columns(const fitsx::FitsImage& img, bool can_run_analysis,
+                      const std::string& key);
 
     LONG ref_ = 1;
     StreamBuffer buf_;

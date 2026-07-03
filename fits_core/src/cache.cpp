@@ -5,12 +5,76 @@
 
 #include <sqlite3.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace fitsx {
 
 namespace {
+
+// Metadata cache (header columns). Bump when the blob format changes.
+constexpr int kMetadataSchemaVersion = 1;
+
+constexpr const char* kCreateMetaSql =
+    "CREATE TABLE IF NOT EXISTS metadata ("
+    "  cache_key TEXT PRIMARY KEY,"
+    "  schema_version INTEGER NOT NULL,"
+    "  width INTEGER,"
+    "  height INTEGER,"
+    "  headers BLOB"
+    ");";
+constexpr const char* kMetaLookupSql =
+    "SELECT width, height, headers FROM metadata "
+    "WHERE cache_key = ?1 AND schema_version = ?2;";
+constexpr const char* kMetaUpsertSql =
+    "INSERT OR REPLACE INTO metadata (cache_key, schema_version, width, height, headers)"
+    " VALUES (?1, ?2, ?3, ?4, ?5);";
+
+void put_u32(std::string& s, uint32_t v) {
+    s.push_back(static_cast<char>(v & 0xFF));
+    s.push_back(static_cast<char>((v >> 8) & 0xFF));
+    s.push_back(static_cast<char>((v >> 16) & 0xFF));
+    s.push_back(static_cast<char>((v >> 24) & 0xFF));
+}
+bool get_u32(const uint8_t* p, size_t n, size_t& off, uint32_t& v) {
+    if (off + 4 > n) return false;
+    v = static_cast<uint32_t>(p[off]) | (static_cast<uint32_t>(p[off + 1]) << 8) |
+        (static_cast<uint32_t>(p[off + 2]) << 16) | (static_cast<uint32_t>(p[off + 3]) << 24);
+    off += 4;
+    return true;
+}
+
+// [u32 count]{ [u32 klen][key][u32 vlen][value][u32 clen][comment] }*
+std::string serialize_headers(const std::vector<FitsHeader>& h) {
+    std::string s;
+    put_u32(s, static_cast<uint32_t>(h.size()));
+    for (const auto& fh : h) {
+        put_u32(s, static_cast<uint32_t>(fh.key.size()));     s += fh.key;
+        put_u32(s, static_cast<uint32_t>(fh.value.size()));   s += fh.value;
+        put_u32(s, static_cast<uint32_t>(fh.comment.size())); s += fh.comment;
+    }
+    return s;
+}
+void deserialize_headers(const uint8_t* p, size_t n, std::vector<FitsHeader>& out) {
+    size_t off = 0;
+    uint32_t count = 0;
+    if (!get_u32(p, n, off, count) || count > 1000000u) return;
+    out.reserve(count);
+    auto read_str = [&](std::string& dst) -> bool {
+        uint32_t len = 0;
+        if (!get_u32(p, n, off, len) || off + len > n) return false;
+        dst.assign(reinterpret_cast<const char*>(p + off), len);
+        off += len;
+        return true;
+    };
+    for (uint32_t i = 0; i < count; ++i) {
+        FitsHeader fh;
+        if (!read_str(fh.key) || !read_str(fh.value) || !read_str(fh.comment)) { out.clear(); return; }
+        out.push_back(std::move(fh));
+    }
+}
 
 constexpr const char* kCreateSql =
     "CREATE TABLE IF NOT EXISTS analysis ("
@@ -81,6 +145,8 @@ AnalysisCache& AnalysisCache::instance() {
 AnalysisCache::~AnalysisCache() {
     if (stmt_lookup_) sqlite3_finalize(stmt_lookup_);
     if (stmt_upsert_) sqlite3_finalize(stmt_upsert_);
+    if (stmt_meta_lookup_) sqlite3_finalize(stmt_meta_lookup_);
+    if (stmt_meta_upsert_) sqlite3_finalize(stmt_meta_upsert_);
     if (db_) sqlite3_close(db_);
 }
 
@@ -103,14 +169,19 @@ void AnalysisCache::ensure_open() {
     sqlite3_exec(db_, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     sqlite3_busy_timeout(db_, 250);
 
-    if (sqlite3_exec(db_, kCreateSql, nullptr, nullptr, nullptr) != SQLITE_OK) {
+    if (sqlite3_exec(db_, kCreateSql, nullptr, nullptr, nullptr) != SQLITE_OK ||
+        sqlite3_exec(db_, kCreateMetaSql, nullptr, nullptr, nullptr) != SQLITE_OK) {
         sqlite3_close(db_); db_ = nullptr; return;
     }
 
     if (sqlite3_prepare_v2(db_, kLookupSql, -1, &stmt_lookup_, nullptr) != SQLITE_OK ||
-        sqlite3_prepare_v2(db_, kUpsertSql, -1, &stmt_upsert_, nullptr) != SQLITE_OK) {
-        if (stmt_lookup_) { sqlite3_finalize(stmt_lookup_); stmt_lookup_ = nullptr; }
-        if (stmt_upsert_) { sqlite3_finalize(stmt_upsert_); stmt_upsert_ = nullptr; }
+        sqlite3_prepare_v2(db_, kUpsertSql, -1, &stmt_upsert_, nullptr) != SQLITE_OK ||
+        sqlite3_prepare_v2(db_, kMetaLookupSql, -1, &stmt_meta_lookup_, nullptr) != SQLITE_OK ||
+        sqlite3_prepare_v2(db_, kMetaUpsertSql, -1, &stmt_meta_upsert_, nullptr) != SQLITE_OK) {
+        if (stmt_lookup_)      { sqlite3_finalize(stmt_lookup_);      stmt_lookup_ = nullptr; }
+        if (stmt_upsert_)      { sqlite3_finalize(stmt_upsert_);      stmt_upsert_ = nullptr; }
+        if (stmt_meta_lookup_) { sqlite3_finalize(stmt_meta_lookup_); stmt_meta_lookup_ = nullptr; }
+        if (stmt_meta_upsert_) { sqlite3_finalize(stmt_meta_upsert_); stmt_meta_upsert_ = nullptr; }
         sqlite3_close(db_); db_ = nullptr;
         return;
     }
@@ -193,6 +264,55 @@ void AnalysisCache::store(std::string_view key, const AnalysisResult& r) {
     const int rc = sqlite3_step(stmt_upsert_);
     (void)rc;
     sqlite3_reset(stmt_upsert_);
+}
+
+std::optional<CachedMetadata> AnalysisCache::lookup_metadata(std::string_view key) {
+    std::lock_guard<std::mutex> lk(m_);
+    ensure_open();
+    if (!db_ || !stmt_meta_lookup_) return std::nullopt;
+
+    sqlite3_reset(stmt_meta_lookup_);
+    sqlite3_clear_bindings(stmt_meta_lookup_);
+    sqlite3_bind_text(stmt_meta_lookup_, 1, key.data(), static_cast<int>(key.size()),
+                      SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt_meta_lookup_, 2, kMetadataSchemaVersion);
+
+    if (sqlite3_step(stmt_meta_lookup_) != SQLITE_ROW) {
+        sqlite3_reset(stmt_meta_lookup_);   // release the WAL read snapshot promptly
+        return std::nullopt;
+    }
+
+    CachedMetadata md;
+    md.width  = sqlite3_column_int(stmt_meta_lookup_, 0);
+    md.height = sqlite3_column_int(stmt_meta_lookup_, 1);
+    const void* blob = sqlite3_column_blob(stmt_meta_lookup_, 2);
+    const int   blen = sqlite3_column_bytes(stmt_meta_lookup_, 2);
+    if (blob && blen > 0)
+        deserialize_headers(static_cast<const uint8_t*>(blob), static_cast<size_t>(blen), md.headers);
+
+    sqlite3_reset(stmt_meta_lookup_);
+    return md;
+}
+
+void AnalysisCache::store_metadata(std::string_view key, const CachedMetadata& m) {
+    std::lock_guard<std::mutex> lk(m_);
+    ensure_open();
+    if (!db_ || !stmt_meta_upsert_) return;
+
+    const std::string blob = serialize_headers(m.headers);
+    sqlite3_reset(stmt_meta_upsert_);
+    sqlite3_clear_bindings(stmt_meta_upsert_);
+    int i = 1;
+    sqlite3_bind_text(stmt_meta_upsert_, i++, key.data(), static_cast<int>(key.size()),
+                      SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt_meta_upsert_, i++, kMetadataSchemaVersion);
+    sqlite3_bind_int(stmt_meta_upsert_, i++, m.width);
+    sqlite3_bind_int(stmt_meta_upsert_, i++, m.height);
+    sqlite3_bind_blob(stmt_meta_upsert_, i++, blob.data(), static_cast<int>(blob.size()),
+                      SQLITE_TRANSIENT);
+
+    sqlite3_step(stmt_meta_upsert_);   // best-effort
+    sqlite3_reset(stmt_meta_upsert_);
 }
 
 }  // namespace fitsx
