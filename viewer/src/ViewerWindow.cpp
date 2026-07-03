@@ -624,6 +624,11 @@ struct ViewerWindow::LoadResult {
     fitsx::StretchParams  stretch;
     fitsx::RenderedBitmap rendered;
     fitsx::AnalysisResult analysis;
+    // When analysis was computed fresh (cache miss), the full per-star detail is
+    // carried along so the first overlay reuses it instead of re-running a whole
+    // detection pass. Empty on a cache hit (detail isn't cached).
+    fitsx::DetailedAnalysis detail;
+    bool                    has_detail = false;
 };
 
 // Posted from the render worker for each completed re-stretch (no analysis,
@@ -712,6 +717,16 @@ void ViewerWindow::worker_main() {
                                            ? auto_p : fitsx::StretchParams{};
                     result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
 
+                    // On a cache miss we run the full analysis once and KEEP the
+                    // per-star detail, so turning on an overlay reuses it instead
+                    // of triggering a second full-image detection pass. On a hit
+                    // the detail isn't cached, so overlays still compute it lazily.
+                    auto compute_fresh = [&] {
+                        auto full = fitsx::run_full_analysis(result->image);
+                        result->analysis   = full.summary;
+                        result->detail     = std::move(full.detail);
+                        result->has_detail = true;
+                    };
                     const std::string ckey =
                         fitsx::compute_cache_key_from_file(load_path.c_str());
                     if (!ckey.empty()) {
@@ -719,11 +734,11 @@ void ViewerWindow::worker_main() {
                             cached.has_value()) {
                             result->analysis = *cached;
                         } else {
-                            result->analysis = fitsx::run_analysis(result->image);
+                            compute_fresh();
                             fitsx::AnalysisCache::instance().store(ckey, result->analysis);
                         }
                     } else {
-                        result->analysis = fitsx::run_analysis(result->image);
+                        compute_fresh();
                     }
                     result->success = true;
                 }
@@ -911,12 +926,18 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     histogram_.set_params(stretch_);        // computation until popup is shown
 
     // New image: the previous per-star analysis is stale. Bump the detail
-    // generation so any in-flight worker result is dropped, forget the old
-    // data, then re-request if an overlay is currently on.
+    // generation so any in-flight worker result is dropped. If the load computed
+    // the detail fresh (cache miss), adopt it directly -- overlays then reuse it
+    // with no second detection pass. On a cache hit the detail wasn't computed,
+    // so fall back to the lazy worker path.
     detail_gen_latest_.fetch_add(1, std::memory_order_relaxed);
-    detailed_.reset();
+    if (r->has_detail) {
+        detailed_ = std::make_shared<const fitsx::DetailedAnalysis>(std::move(r->detail));
+    } else {
+        detailed_.reset();
+    }
     detail_pending_ = false;
-    if (needs_detailed()) ensure_detailed();
+    if (needs_detailed()) ensure_detailed();   // no-op if detailed_ already set
     tilt_window_.clear();          // old tilt is stale until the new analysis lands
     // Refresh the aberration crops from the freshly rendered frame if open.
     push_aberration();

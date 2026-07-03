@@ -515,11 +515,13 @@ std::vector<DetectedStar> detect_stars(const FitsImage& img) {
 
 }  // namespace
 
-AnalysisResult run_analysis(const FitsImage& img) {
+namespace {
+// Aggregate the whole-image pixel stats + the detected-star list into the
+// cache / Explorer-columns summary. Byte-for-byte identical to the former
+// run_analysis() body so cached values and --check output don't shift.
+AnalysisResult summarize(const PixelStats& stats,
+                         const std::vector<DetectedStar>& stars) {
     AnalysisResult r;
-    if (img.empty()) return r;
-
-    const PixelStats stats = compute_pixel_stats(img);
     r.mean       = stats.mean;
     r.stddev     = stats.stddev;
     r.median     = stats.median;
@@ -529,55 +531,62 @@ AnalysisResult run_analysis(const FitsImage& img) {
     r.max_value  = stats.max_value;
     r.max_count  = stats.max_count;
 
-    {
-        const auto stars = detect_stars(img);
-        r.star_count = static_cast<int>(stars.size());
-
-        if (!stars.empty()) {
-            std::vector<double> hfrs, fwhms, eccs;
-            hfrs.reserve(stars.size());
-            fwhms.reserve(stars.size());
-            eccs.reserve(stars.size());
-            for (const auto& s : stars) {
-                hfrs.push_back(s.hfr);
-                fwhms.push_back(s.fwhm);
-                eccs.push_back(s.ecc);
-            }
-            r.hfr_median         = median_of(hfrs);
-            r.fwhm_median        = median_of(fwhms);
-            r.eccentricity_median = median_of(eccs);
-
-            // HFR std-dev: classic SD over the star-by-star list.
-            double sum = 0.0, sq = 0.0;
-            for (double h : hfrs) { sum += h; sq += h * h; }
-            const double n = static_cast<double>(hfrs.size());
-            const double mean_hfr = sum / n;
-            r.hfr_stddev = (n > 1.0)
-                ? std::sqrt(std::max(0.0, sq / n - mean_hfr * mean_hfr))
-                : 0.0;
+    r.star_count = static_cast<int>(stars.size());
+    if (!stars.empty()) {
+        std::vector<double> hfrs, fwhms, eccs;
+        hfrs.reserve(stars.size());
+        fwhms.reserve(stars.size());
+        eccs.reserve(stars.size());
+        for (const auto& s : stars) {
+            hfrs.push_back(s.hfr);
+            fwhms.push_back(s.fwhm);
+            eccs.push_back(s.ecc);
         }
-    }
+        r.hfr_median         = median_of(hfrs);
+        r.fwhm_median        = median_of(fwhms);
+        r.eccentricity_median = median_of(eccs);
 
+        // HFR std-dev: classic SD over the star-by-star list.
+        double sum = 0.0, sq = 0.0;
+        for (double h : hfrs) { sum += h; sq += h * h; }
+        const double n = static_cast<double>(hfrs.size());
+        const double mean_hfr = sum / n;
+        r.hfr_stddev = (n > 1.0)
+            ? std::sqrt(std::max(0.0, sq / n - mean_hfr * mean_hfr))
+            : 0.0;
+    }
     r.success = true;
     return r;
 }
+}  // namespace
+
+FullAnalysis run_full_analysis(const FitsImage& img) {
+    FullAnalysis f;
+    if (img.empty()) return f;
+
+    // The two expensive full-image passes, run exactly ONCE; both the summary
+    // and the detailed (per-star) result are derived from them.
+    const PixelStats stats = compute_pixel_stats(img);
+    std::vector<DetectedStar> stars = detect_stars(img);
+
+    f.summary = summarize(stats, stars);
+
+    f.detail.success   = true;
+    f.detail.width     = img.width;
+    f.detail.height    = img.height;
+    f.detail.background = stats.median;
+    f.detail.threshold = stats.median + kThrSigma * 1.4826 * stats.mad;
+    f.detail.stars     = std::move(stars);
+    return f;
+}
+
+AnalysisResult run_analysis(const FitsImage& img) {
+    return run_full_analysis(img).summary;
+}
 
 DetailedAnalysis run_detailed_analysis(const FitsImage& img) {
-    DetailedAnalysis d;
-    if (img.empty()) return d;
-
-    d.width  = img.width;
-    d.height = img.height;
-
-    // Same detector as run_analysis -- the inspection overlay must agree with
-    // the cached star count. background/threshold are informational only here
-    // (the detector now uses a spatially-adaptive local threshold internally).
-    const PixelStats stats = compute_pixel_stats(img);
-    d.background = stats.median;
-    d.threshold = stats.median + kThrSigma * 1.4826 * stats.mad;
-    d.stars = detect_stars(img);
-    d.success = true;
-    return d;
+    FullAnalysis f = run_full_analysis(img);
+    return std::move(f.detail);
 }
 
 TiltResult compute_tilt(const DetailedAnalysis& a, int grid) {
