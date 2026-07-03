@@ -62,7 +62,9 @@ IFACEMETHODIMP FitsThumbnailProvider::GetThumbnail(UINT cx, HBITMAP* phbmp,
     // in-process inside explorer.exe, so an exception escaping across the COM
     // boundary crashes the host. Contain everything and fail the thumbnail.
     try {
-        auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
+        // prefer_fast: thumbnails are downsampled to ~cx px, so a half-resolution
+        // RAW decode (LibRaw half_size) is visually identical and ~4x faster.
+        auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size(), /*prefer_fast=*/true);
         if (!loaded.success) return E_FAIL;
 
         const auto stretch = fitsx::compute_auto_stretch(loaded.image);
