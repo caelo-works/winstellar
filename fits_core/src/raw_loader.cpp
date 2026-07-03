@@ -122,6 +122,13 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size, bool half_res) 
         // once the frame is downsampled to a ~256 px thumbnail.
         P.half_size      = half_res ? 1 : 0;
 
+        // Cap the RAW-unpack allocation. This decodes attacker-supplied files
+        // in-process inside explorer.exe (thumbnail / preview handlers), and
+        // LibRaw has a history of decompression-bomb CVEs. 2 GB is far above any
+        // real sensor's raw buffer (~120 MB for a 60 Mpx 16-bit frame) yet bounds
+        // a hostile file that claims to need an absurd allocation.
+        rp->imgdata.rawparams.max_raw_memory_mb = 2048;
+
         rc = rp->unpack();
         if (rc != LIBRAW_SUCCESS) {
             res.error = std::string("LibRaw unpack: ") + libraw_strerror(rc);
