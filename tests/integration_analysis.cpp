@@ -87,6 +87,33 @@ TEST(Analysis, DetailedMatchesAggregateStarCount) {
     }
 }
 
+TEST(Analysis, FullAnalysisMatchesSeparateCalls) {
+    // run_full_analysis must produce exactly what run_analysis + run_detailed
+    // produce separately -- that equivalence is what lets the viewer compute
+    // detection ONCE at load and reuse it for overlays.
+    auto spec = wst::make_star_field(200, 200, 20, 1000.0f, 25.0f,
+                                     30000.0f, 1.5f, 0xBEEF);
+    auto img = to_fitsimage(spec);
+
+    const auto full = fitsx::run_full_analysis(img);
+    const auto agg  = run_analysis(img);
+    const auto det  = fitsx::run_detailed_analysis(img);
+
+    // Summary side.
+    EXPECT_EQ(full.summary.star_count,   agg.star_count);
+    EXPECT_DOUBLE_EQ(full.summary.hfr_median,  agg.hfr_median);
+    EXPECT_DOUBLE_EQ(full.summary.median,      agg.median);
+    EXPECT_DOUBLE_EQ(full.summary.max_value,   agg.max_value);
+    // Detail side.
+    EXPECT_EQ(full.detail.success, det.success);
+    EXPECT_EQ(full.detail.width,   det.width);
+    EXPECT_EQ(full.detail.height,  det.height);
+    ASSERT_EQ(full.detail.stars.size(), det.stars.size());
+    EXPECT_EQ(static_cast<int>(full.detail.stars.size()), full.summary.star_count);
+    // Cross-check: same star count on both faces of the single computation.
+    EXPECT_EQ(static_cast<int>(full.detail.stars.size()), agg.star_count);
+}
+
 TEST(Analysis, TiltDetectsSharpCornerOppositeSoft) {
     // Hand-built detailed result: TL corner crowded with tight stars (small
     // HFR), BR corner with bloated stars (large HFR). compute_tilt should call

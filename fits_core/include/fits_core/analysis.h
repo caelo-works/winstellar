@@ -73,6 +73,17 @@ struct DetailedAnalysis {
 
 [[nodiscard]] DetailedAnalysis run_detailed_analysis(const FitsImage& img);
 
+// Both of the above run the same expensive detect_stars() + compute_pixel_stats()
+// over the whole image. When a caller needs both (the viewer, at load time,
+// wants the cached summary AND wants to keep the star list ready for overlays),
+// computing them once and deriving both avoids a second full-image detection
+// pass. run_analysis / run_detailed_analysis are thin wrappers over this.
+struct FullAnalysis {
+    AnalysisResult   summary;
+    DetailedAnalysis detail;
+};
+[[nodiscard]] FullAnalysis run_full_analysis(const FitsImage& img);
+
 // ---------------------------------------------------------------------------
 //  Tilt map -- bins the detected stars into a grid x grid mesh and reports
 //  median HFR per cell. Sensor / focuser tilt shows as a sharp corner opposite
