@@ -1,6 +1,7 @@
 #include "TiltView.h"
 
 #include "InspectColor.h"
+#include "InspectRotation.h"
 
 #include <dwmapi.h>
 #include <dwrite.h>
@@ -19,16 +20,7 @@ const D2D1::ColorF kText   (0xE0E2E5);
 template <typename T> void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
 // Displayed 3x3 grid cell (dr,dc) -> source cell index under cw rotation.
-int src_cell(int dr, int dc, int rot) {
-    int sr, sc;
-    switch (rot) {
-        case 90:  sr = 2 - dc; sc = dr;     break;
-        case 180: sr = 2 - dr; sc = 2 - dc; break;
-        case 270: sr = dc;     sc = 2 - dr; break;
-        default:  sr = dr;     sc = dc;     break;
-    }
-    return sr * 3 + sc;
-}
+// src_cell -> disp_to_src_index(.,.,3,rot) in InspectRotation.h.
 
 // quality_color() (HFR green->amber->red ramp) lives in InspectColor.h, shared
 // with the on-image star markers.
@@ -182,8 +174,8 @@ void TiltWindow::render() {
     // Node order TL, TR, BR, BL, centre -> source cells, permuted by rotation
     // so the displayed diagram matches the on-screen orientation.
     const int           ci[5]  = {
-        src_cell(0, 0, rot_), src_cell(0, 2, rot_), src_cell(2, 2, rot_),
-        src_cell(2, 0, rot_), src_cell(1, 1, rot_) };
+        disp_to_src_index(0, 0, 3, rot_), disp_to_src_index(0, 2, 3, rot_), disp_to_src_index(2, 2, 3, rot_),
+        disp_to_src_index(2, 0, 3, rot_), disp_to_src_index(1, 1, 3, rot_) };
     const D2D1_POINT_2F nom[5] = { {sx0,sy0},{sx1,sy0},{sx1,sy1},{sx0,sy1},{mx,my} };
     const float         lox[5] = {  8.0f, -52.0f, -52.0f,  8.0f, -22.0f };
     const float         loy[5] = {  8.0f,   8.0f, -24.0f, -24.0f, 10.0f };

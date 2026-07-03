@@ -46,6 +46,11 @@ winstellar_add_test_exe(unit_cache_key  unit_cache_key.cpp)
 winstellar_add_test_exe(unit_debayer    unit_debayer.cpp)
 winstellar_add_test_exe(unit_raw        unit_raw.cpp)
 
+# Header-only inspection-rotation helpers live in viewer/src; give this one test
+# access to that include dir (no link against the viewer needed).
+winstellar_add_test_exe(unit_rotation   unit_rotation.cpp)
+target_include_directories(unit_rotation PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
+
 # ---------- Phase 2: integration tests (file/buffer I/O) -------------------
 winstellar_add_test_exe(integration_fits_loader integration_fits_loader.cpp)
 winstellar_add_test_exe(integration_xisf        integration_xisf.cpp)

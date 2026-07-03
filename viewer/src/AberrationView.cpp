@@ -2,6 +2,8 @@
 
 #include "fits_core/pixmath.h"
 
+#include "InspectRotation.h"
+
 #include <dwmapi.h>
 #include <dwrite.h>
 #include <commctrl.h>
@@ -82,43 +84,10 @@ void blit_crop(const fitsx::RenderedBitmap& rb, int x0, int y0, int C,
 }
 
 // Displayed grid cell (dr,dc) -> source grid cell (sr,sc), N x N, cw rotation.
-void disp_to_src_cell(int dr, int dc, int N, int rot, int& sr, int& sc) {
-    switch (rot) {
-        case 90:  sr = N - 1 - dc; sc = dr;         break;
-        case 180: sr = N - 1 - dr; sc = N - 1 - dc; break;
-        case 270: sr = dc;         sc = N - 1 - dr; break;
-        default:  sr = dr;         sc = dc;         break;
-    }
-}
 
 // Rotate an n x n BGRA buffer clockwise by rot (0/90/180/270).
-void rotate_bgra(const std::vector<uint8_t>& s, int n, int rot, std::vector<uint8_t>& d) {
-    if (rot == 0) { d = s; return; }
-    d.resize(s.size());
-    for (int r = 0; r < n; ++r)
-        for (int c = 0; c < n; ++c) {
-            int sr, sc;
-            switch (rot) {
-                case 90:  sr = n - 1 - c; sc = r;         break;
-                case 180: sr = n - 1 - r; sc = n - 1 - c; break;
-                case 270: sr = c;         sc = n - 1 - r; break;
-                default:  sr = r;         sc = c;         break;
-            }
-            std::memcpy(&d[(static_cast<size_t>(r) * n + c) * 4],
-                        &s[(static_cast<size_t>(sr) * n + sc) * 4], 4);
-        }
-}
 
 // Rotate a point (x,y) within an n x n box clockwise by rot.
-void rotate_pt(float x, float y, int n, int rot, float& xo, float& yo) {
-    const float m = n - 1.0f;
-    switch (rot) {
-        case 90:  xo = m - y; yo = x;     break;
-        case 180: xo = m - x; yo = m - y; break;
-        case 270: xo = y;     yo = m - x; break;
-        default:  xo = x;     yo = y;     break;
-    }
-}
 
 LRESULT CALLBACK bar_subproc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR) {
     if (m == WM_ERASEBKGND) {
@@ -382,7 +351,7 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
             blit_crop(rb, x0, y0, C, raw);
             Crop& cr = crops_[static_cast<size_t>(dr) * N + dc];
             cr.w = C; cr.h = C;
-            rotate_bgra(raw, C, rot_, cr.bgra);   // rotate to displayed orientation
+            rotate_bgra_square(raw, C, rot_, cr.bgra);   // rotate to displayed orientation
         }
     have_crops_ = true;
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
@@ -413,7 +382,7 @@ void AberrationWindow::build_inspected() {
             for (const auto& star : z.stars) {
                 DispStar ds;
                 asinh_stamp(*img_, star.ox, star.oy, fitsx::kPsfStamp, raw);
-                rotate_bgra(raw, fitsx::kPsfStamp, rot_, ds.bgra);
+                rotate_bgra_square(raw, fitsx::kPsfStamp, rot_, ds.bgra);
                 rotate_pt(star.x0, star.y0, fitsx::kPsfStamp, rot_, ds.x0, ds.y0);
                 ds.pa = star.pa + rot_rad;
                 ds.siga = star.siga; ds.sigb = star.sigb;
