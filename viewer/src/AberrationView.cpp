@@ -324,10 +324,27 @@ void AberrationWindow::set_source(const fitsx::RenderedBitmap& rb) {
 
 void AberrationWindow::set_image(std::shared_ptr<const fitsx::FitsImage> img) {
     img_ = std::move(img);
-    if (mode_ != Mode::Inspected || !is_visible()) return;
-    // Recompute only when the image (or grid) actually changed.
-    if (img_.get() == plate_for_ && grid_ == plate_grid_ && have_plate_) return;
-    build_inspected();
+    // No compute here: compute_psf_plate runs on the viewer's worker thread and
+    // comes back via set_plate(). If the cached plate no longer matches this
+    // image/grid, drop it so a stale plate isn't shown while the new one runs.
+    if (img_.get() != plate_for_ || grid_ != plate_grid_) {
+        plate_ = {}; plate_for_ = nullptr; have_plate_ = false;
+        if (mode_ == Mode::Inspected && is_visible()) rebuild_inspected_display();
+    }
+}
+
+bool AberrationWindow::needs_plate() const {
+    // "computed for this image/grid?" -- plate_for_/plate_grid_ are stamped by
+    // set_plate even for a starless (failed) plate, so we don't re-request it.
+    return img_ && !img_->empty() &&
+           (img_.get() != plate_for_ || grid_ != plate_grid_);
+}
+
+void AberrationWindow::set_plate(fitsx::PsfPlate plate, int g) {
+    plate_      = std::move(plate);
+    plate_for_  = img_ ? img_.get() : nullptr;
+    plate_grid_ = g;
+    rebuild_inspected_display();
 }
 
 void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
@@ -363,21 +380,6 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
         }
     have_crops_ = true;
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
-}
-
-void AberrationWindow::build_inspected() {
-    // Expensive half: run the PSF plate (detection + moments) and cache it, so a
-    // later rotation only re-rotates the display stamps (see set_rotation).
-    if (!img_ || img_->empty()) {
-        for (auto& z : dzones_) for (auto& s : z.stars) safe_release(s.tex);
-        dzones_.clear(); have_plate_ = false; plate_ = {};
-        plate_for_ = nullptr;
-        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
-        return;
-    }
-    plate_ = fitsx::compute_psf_plate(*img_, grid_, 4);
-    plate_for_ = img_.get(); plate_grid_ = grid_;
-    rebuild_inspected_display();
 }
 
 void AberrationWindow::rebuild_inspected_display() {

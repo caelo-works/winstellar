@@ -45,9 +45,14 @@ public:
     // what's on screen. Marks the plate dirty; the next set_image rebuilds it.
     void set_rotation(int deg);
 
-    // Linear image (for Inspecté). The PSF plate is recomputed only when the
-    // image (or grid / rotation) actually changes (not on every re-stretch).
+    // Linear image (for Inspecté). Only stores it -- the PSF plate is computed
+    // off the UI thread by the viewer and handed back via set_plate().
     void set_image(std::shared_ptr<const fitsx::FitsImage> img);
+    // True when the current image (Inspected mode) has no valid cached plate;
+    // the viewer polls this to decide whether to request one on the worker.
+    bool needs_plate() const;
+    // Hand back a PSF plate the viewer computed for the current image at grid g.
+    void set_plate(fitsx::PsfPlate plate, int g);
     // Rendered frame (for Visuel).
     void set_source(const fitsx::RenderedBitmap& rb);
     void clear();
@@ -71,7 +76,6 @@ private:
     LRESULT on_bar_customdraw(LPNMTBCUSTOMDRAW nm) const;
 
     void build_visual(const fitsx::RenderedBitmap& rb);  // (re)extract Visuel crops
-    void build_inspected();          // (re)compute the PSF plate (expensive)
     void rebuild_inspected_display(); // rebuild rotated display zones from plate_
 
     static constexpr int kBarH = 40;
