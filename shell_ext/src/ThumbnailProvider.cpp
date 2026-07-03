@@ -57,30 +57,38 @@ IFACEMETHODIMP FitsThumbnailProvider::GetThumbnail(UINT cx, HBITMAP* phbmp,
 
     if (buf_.empty()) return E_FAIL;
 
-    auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
-    if (!loaded.success) return E_FAIL;
+    // A hostile or corrupt file can make the loaders throw (bad_alloc /
+    // length_error from header-driven vector sizing). This handler runs
+    // in-process inside explorer.exe, so an exception escaping across the COM
+    // boundary crashes the host. Contain everything and fail the thumbnail.
+    try {
+        auto loaded = fitsx::load_from_memory(buf_.data(), buf_.size());
+        if (!loaded.success) return E_FAIL;
 
-    const auto stretch = fitsx::compute_auto_stretch(loaded.image);
-    const auto bmp = fitsx::render_to_bgra(loaded.image, stretch,
-                                            static_cast<int>(cx),
-                                            static_cast<int>(cx));
-    if (bmp.width <= 0 || bmp.height <= 0) return E_FAIL;
+        const auto stretch = fitsx::compute_auto_stretch(loaded.image);
+        const auto bmp = fitsx::render_to_bgra(loaded.image, stretch,
+                                                static_cast<int>(cx),
+                                                static_cast<int>(cx));
+        if (bmp.width <= 0 || bmp.height <= 0) return E_FAIL;
 
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = bmp.width;
-    bi.bmiHeader.biHeight = -bmp.height;  // top-down
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = bmp.width;
+        bi.bmiHeader.biHeight = -bmp.height;  // top-down
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
 
-    void* bits = nullptr;
-    HBITMAP h = ::CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!h || !bits) {
-        if (h) ::DeleteObject(h);
+        void* bits = nullptr;
+        HBITMAP h = ::CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!h || !bits) {
+            if (h) ::DeleteObject(h);
+            return E_FAIL;
+        }
+        memcpy(bits, bmp.bgra.data(), bmp.bgra.size());
+        *phbmp = h;
+        return S_OK;
+    } catch (...) {
         return E_FAIL;
     }
-    memcpy(bits, bmp.bgra.data(), bmp.bgra.size());
-    *phbmp = h;
-    return S_OK;
 }
