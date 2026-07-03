@@ -119,6 +119,11 @@ private:
     std::vector<Crop>         crops_;
     std::vector<ID2D1Bitmap*> tiles_;
     bool have_crops_ = false;
+    // Layout the current crops/tiles were built for. When a re-stretch keeps the
+    // same grid / crop size / rotation, the tiles are refreshed in place
+    // (CopyFromMemory) instead of destroyed and recreated every slider tick.
+    int  last_visual_C_   = -1;
+    int  last_visual_rot_ = -1;
 
     // Inspecté state.
     std::shared_ptr<const fitsx::FitsImage> img_;

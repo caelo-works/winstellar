@@ -3,8 +3,8 @@
 #include "fits_core/pixmath.h"
 
 #include "InspectRotation.h"
+#include "D2DPopup.h"
 
-#include <dwmapi.h>
 #include <dwrite.h>
 #include <commctrl.h>
 
@@ -39,9 +39,6 @@ constexpr int kIdVisual  = 103;
 constexpr int kIdInspect = 104;
 
 constexpr int kBaseTile = 178;   // initial on-screen tile size (3x3)
-
-template <typename T>
-void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
 // luma_at(img, x, y) comes from fits_core/pixmath.h (found via ADL on FitsImage).
 
@@ -153,13 +150,7 @@ bool AberrationWindow::create(HWND owner, HINSTANCE hinst) {
 
     create_toolbar();
 
-    BOOL dark = TRUE;
-    ::DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
-    COLORREF capt = kBgColorRef;
-    ::DwmSetWindowAttribute(hwnd_, 35, &capt, sizeof(capt));
-    ::DwmSetWindowAttribute(hwnd_, 34, &capt, sizeof(capt));
-    COLORREF text = RGB(0xE8, 0xEA, 0xED);
-    ::DwmSetWindowAttribute(hwnd_, 36, &text, sizeof(text));
+    apply_dark_titlebar(hwnd_, kBgColorRef);
 
     resize_to_grid();
     init_d2d();
@@ -348,9 +339,9 @@ void AberrationWindow::set_plate(fitsx::PsfPlate plate, int g) {
 }
 
 void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
-    release_tiles();
-    crops_.clear(); have_crops_ = false;
     if (rb.width <= 0 || rb.height <= 0 || rb.bgra.empty()) {
+        release_tiles(); crops_.clear(); have_crops_ = false;
+        last_visual_C_ = -1;
         if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -360,9 +351,24 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
     int C = std::clamp(tile_px(), 48, 320);
     C = std::min({ C, W / N, H / N });
     if (C < 16) C = std::min({ W, H, 16 });
-    if (C < 1) { if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return; }
-    crops_.assign(static_cast<size_t>(N) * N, Crop{});
-    tiles_.assign(static_cast<size_t>(N) * N, nullptr);
+    if (C < 1) {
+        release_tiles(); crops_.clear(); have_crops_ = false; last_visual_C_ = -1;
+        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return;
+    }
+
+    // Reuse the tiles when only the pixels changed (same grid / crop size /
+    // rotation, e.g. a slider re-stretch): overwrite the crops in place and
+    // refresh each tile bitmap via CopyFromMemory, instead of destroying and
+    // recreating N*N D2D bitmaps every tick.
+    const bool reuse = have_crops_ && last_visual_C_ == C && last_visual_rot_ == rot_ &&
+                       static_cast<int>(crops_.size()) == N * N;
+    if (!reuse) {
+        release_tiles();
+        crops_.assign(static_cast<size_t>(N) * N, Crop{});
+        tiles_.assign(static_cast<size_t>(N) * N, nullptr);
+    }
+    last_visual_C_ = C; last_visual_rot_ = rot_;
+
     auto axis_centre = [](int i, int n, int L, int c) {
         return (n <= 1) ? L / 2 : c / 2 + i * (L - c) / (n - 1);
     };
@@ -374,9 +380,13 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
             int x0 = std::clamp(axis_centre(sc, N, W, C) - C / 2, 0, std::max(0, W - C));
             int y0 = std::clamp(axis_centre(sr, N, H, C) - C / 2, 0, std::max(0, H - C));
             blit_crop(rb, x0, y0, C, raw);
-            Crop& cr = crops_[static_cast<size_t>(dr) * N + dc];
+            const size_t idx = static_cast<size_t>(dr) * N + dc;
+            Crop& cr = crops_[idx];
             cr.w = C; cr.h = C;
             rotate_bgra_square(raw, C, rot_, cr.bgra);   // rotate to displayed orientation
+            // Kept tile: refresh its pixels in place (same C*C size as created).
+            if (reuse && tiles_[idx])
+                tiles_[idx]->CopyFromMemory(nullptr, cr.bgra.data(), C * 4);
         }
     have_crops_ = true;
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
@@ -428,12 +438,7 @@ void AberrationWindow::init_d2d() {
         dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &text_);
     if (!d2d_factory_ || !hwnd_) return;
-    RECT rc; ::GetClientRect(hwnd_, &rc);
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(), 96.0f, 96.0f);
-    D2D1_HWND_RENDER_TARGET_PROPERTIES hprops = D2D1::HwndRenderTargetProperties(
-        hwnd_, D2D1::SizeU(std::max<LONG>(1, rc.right), std::max<LONG>(1, rc.bottom)));
-    d2d_factory_->CreateHwndRenderTarget(props, hprops, &rt_);
+    rt_ = create_hwnd_rt(d2d_factory_, hwnd_);
     if (!rt_) return;
     rt_->CreateSolidColorBrush(kPanelBg, &br_panel_);
     rt_->CreateSolidColorBrush(kFrame,   &br_frame_);
