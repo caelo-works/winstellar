@@ -339,9 +339,9 @@ void AberrationWindow::set_plate(fitsx::PsfPlate plate, int g) {
 }
 
 void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
-    release_tiles();
-    crops_.clear(); have_crops_ = false;
     if (rb.width <= 0 || rb.height <= 0 || rb.bgra.empty()) {
+        release_tiles(); crops_.clear(); have_crops_ = false;
+        last_visual_C_ = -1;
         if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -351,9 +351,24 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
     int C = std::clamp(tile_px(), 48, 320);
     C = std::min({ C, W / N, H / N });
     if (C < 16) C = std::min({ W, H, 16 });
-    if (C < 1) { if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return; }
-    crops_.assign(static_cast<size_t>(N) * N, Crop{});
-    tiles_.assign(static_cast<size_t>(N) * N, nullptr);
+    if (C < 1) {
+        release_tiles(); crops_.clear(); have_crops_ = false; last_visual_C_ = -1;
+        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return;
+    }
+
+    // Reuse the tiles when only the pixels changed (same grid / crop size /
+    // rotation, e.g. a slider re-stretch): overwrite the crops in place and
+    // refresh each tile bitmap via CopyFromMemory, instead of destroying and
+    // recreating N*N D2D bitmaps every tick.
+    const bool reuse = have_crops_ && last_visual_C_ == C && last_visual_rot_ == rot_ &&
+                       static_cast<int>(crops_.size()) == N * N;
+    if (!reuse) {
+        release_tiles();
+        crops_.assign(static_cast<size_t>(N) * N, Crop{});
+        tiles_.assign(static_cast<size_t>(N) * N, nullptr);
+    }
+    last_visual_C_ = C; last_visual_rot_ = rot_;
+
     auto axis_centre = [](int i, int n, int L, int c) {
         return (n <= 1) ? L / 2 : c / 2 + i * (L - c) / (n - 1);
     };
@@ -365,9 +380,13 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
             int x0 = std::clamp(axis_centre(sc, N, W, C) - C / 2, 0, std::max(0, W - C));
             int y0 = std::clamp(axis_centre(sr, N, H, C) - C / 2, 0, std::max(0, H - C));
             blit_crop(rb, x0, y0, C, raw);
-            Crop& cr = crops_[static_cast<size_t>(dr) * N + dc];
+            const size_t idx = static_cast<size_t>(dr) * N + dc;
+            Crop& cr = crops_[idx];
             cr.w = C; cr.h = C;
             rotate_bgra_square(raw, C, rot_, cr.bgra);   // rotate to displayed orientation
+            // Kept tile: refresh its pixels in place (same C*C size as created).
+            if (reuse && tiles_[idx])
+                tiles_[idx]->CopyFromMemory(nullptr, cr.bgra.data(), C * 4);
         }
     have_crops_ = true;
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
