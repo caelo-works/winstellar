@@ -670,12 +670,15 @@ std::string compute_cache_key_from_file(const wchar_t* utf16_path) {
     if (!utf16_path) return {};
     FILE* f = nullptr;
     if (_wfopen_s(&f, utf16_path, L"rb") != 0 || !f) return {};
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return {}; }
-    const long sz = std::ftell(f);
+    // 64-bit size (std::ftell is 32-bit long on Windows -> wraps for >= 2 GB
+    // files, poisoning the cache key's size component).
+    if (_fseeki64(f, 0, SEEK_END) != 0) { std::fclose(f); return {}; }
+    const long long sz = _ftelli64(f);
     if (sz <= 0) { std::fclose(f); return {}; }
-    std::fseek(f, 0, SEEK_SET);
+    _fseeki64(f, 0, SEEK_SET);
     uint8_t head[8192] = {};   // zero-init; small files leave the tail at 0
-    std::fread(head, 1, sizeof(head), f);
+    const size_t got = std::fread(head, 1, sizeof(head), f);
+    (void)got;                 // short read is fine: unread tail stays zero
     std::fclose(f);
     return compute_cache_key(head, static_cast<size_t>(sz));
 }
