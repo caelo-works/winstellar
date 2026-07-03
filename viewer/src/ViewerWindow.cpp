@@ -425,6 +425,9 @@ int ViewerWindow::run_message_loop() {
     inspect_cv_.notify_all();
     if (worker_thread_.joinable())  worker_thread_.join();
     if (inspect_thread_.joinable()) inspect_thread_.join();
+    // Workers are stopped -- nothing more will be posted. Free anything still
+    // queued so its heap payload doesn't leak (#29).
+    drain_worker_messages();
 
     histogram_.destroy();
     aberration_.destroy();
@@ -684,6 +687,25 @@ struct ViewerWindow::PsfResult {
     int              grid = 3;               // grid the plate was computed at
     fitsx::PsfPlate  plate;
 };
+
+void ViewerWindow::drain_worker_messages() {
+    if (!hwnd_) return;
+    // Each WM_APP_* result is a heap pointer handed over via PostMessage; the UI
+    // handler normally takes ownership. Any still queued at shutdown (posted but
+    // never dispatched) would leak, so delete their payloads here. Types are
+    // complete at this point, unlike in destroy() further up the file.
+    MSG msg;
+    while (::PeekMessageW(&msg, hwnd_, WM_APP_LOAD_DONE, WM_APP_ANALYSIS_DONE, PM_REMOVE)) {
+        switch (msg.message) {
+            case WM_APP_LOAD_DONE:     delete reinterpret_cast<LoadResult*>(msg.lParam);   break;
+            case WM_APP_RENDER_DONE:   delete reinterpret_cast<RenderResult*>(msg.lParam); break;
+            case WM_APP_DETAIL_DONE:   delete reinterpret_cast<DetailResult*>(msg.lParam); break;
+            case WM_APP_BG_DONE:       delete reinterpret_cast<BgResult*>(msg.lParam);     break;
+            case WM_APP_PSF_DONE:      delete reinterpret_cast<PsfResult*>(msg.lParam);    break;
+            case WM_APP_ANALYSIS_DONE: delete reinterpret_cast<LoadAnalysis*>(msg.lParam); break;
+        }
+    }
+}
 
 // Unified worker. Sleeps on worker_cv_, wakes when pending_load_ or
 // pending_render_ is set (or on shutdown via worker_quit_). Load takes
