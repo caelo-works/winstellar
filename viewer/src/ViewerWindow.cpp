@@ -851,9 +851,19 @@ void ViewerWindow::on_detail_finished(std::uint64_t gen, DetailResult* raw) {
 // the popup (no-op if the popup is hidden or the analysis isn't ready yet).
 void ViewerWindow::refresh_tilt_window() {
     if (!tilt_window_.is_visible()) return;
-    tilt_window_.set_rotation(rotation_deg_);
-    if (detailed_) tilt_window_.set_tilt(fitsx::compute_tilt(*detailed_, 3));
-    else           tilt_window_.clear();
+    tilt_window_.set_rotation(rotation_deg_);   // TiltView permutes at paint
+    if (!detailed_) {
+        tilt_window_.clear();
+        tilt_computed_for_ = nullptr;
+        return;
+    }
+    // compute_tilt is rotation-independent, so recompute only when the
+    // underlying detection actually changed (new image / fresh analysis) --
+    // not on every R / Shift+R while the window is open.
+    if (detailed_.get() != tilt_computed_for_) {
+        tilt_window_.set_tilt(fitsx::compute_tilt(*detailed_, 3));
+        tilt_computed_for_ = detailed_.get();
+    }
 }
 
 // Push the current rendered frame (and, for the measured "Inspected" mode, the
@@ -939,6 +949,7 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     detail_pending_ = false;
     if (needs_detailed()) ensure_detailed();   // no-op if detailed_ already set
     tilt_window_.clear();          // old tilt is stale until the new analysis lands
+    tilt_computed_for_ = nullptr;  // force a recompute for the new image
     // Refresh the aberration crops from the freshly rendered frame if open.
     push_aberration();
     bg_for_ = nullptr;             // new image -> recompute the background map
