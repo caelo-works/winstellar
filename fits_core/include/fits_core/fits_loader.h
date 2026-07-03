@@ -36,7 +36,12 @@ enum class ImageFormat { Fits, Xisf, Raw };
 // Load a FITS image from an in-memory buffer.
 // CFITSIO is invoked in read-only memory mode; the caller retains ownership of
 // the buffer for the duration of the call. The returned image owns its data.
-[[nodiscard]] LoadResult load_from_memory(const void* buffer, size_t size);
+//
+// prefer_fast=true asks for a speed/size-optimized decode suitable for a
+// thumbnail (the result is downsampled anyway). Currently honored by the RAW
+// path (LibRaw half_size, ~4x faster); FITS/XISF decode full-resolution for now.
+[[nodiscard]] LoadResult load_from_memory(const void* buffer, size_t size,
+                                          bool prefer_fast = false);
 
 // Convenience wrapper for the standalone viewer; takes a wide path.
 [[nodiscard]] LoadResult load_from_file(const wchar_t* utf16_path);

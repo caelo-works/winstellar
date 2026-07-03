@@ -268,7 +268,7 @@ FitsMetadata parse_fits_metadata(const void* buffer, size_t size) {
     return md;
 }
 
-LoadResult load_from_memory(const void* buffer, size_t size) {
+LoadResult load_from_memory(const void* buffer, size_t size, bool prefer_fast) {
     LoadResult res;
     if (!buffer || size == 0) {
         res.error = "Empty buffer";
@@ -281,8 +281,8 @@ LoadResult load_from_memory(const void* buffer, size_t size) {
     // final fallback.
     switch (detect_format(buffer, size)) {
         case ImageFormat::Xisf: return load_xisf_from_memory(buffer, size);
-        case ImageFormat::Raw:  return load_raw_from_memory(buffer, size);
-        case ImageFormat::Fits: break;  // handled by CFITSIO below
+        case ImageFormat::Raw:  return load_raw_from_memory(buffer, size, prefer_fast);
+        case ImageFormat::Fits: break;  // handled by CFITSIO below (prefer_fast n/a yet)
     }
 
     fitsfile* fptr = nullptr;

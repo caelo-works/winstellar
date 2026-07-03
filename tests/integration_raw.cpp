@@ -53,6 +53,28 @@ TEST(RawIntegration, DecodesRawToLinearColor) {
     EXPECT_FALSE(instr.empty());
 }
 
+TEST(RawIntegration, HalfResDecodeIsAboutHalfSize) {
+    const auto p = raw_test_path();
+    if (p.empty() || !std::filesystem::exists(p))
+        GTEST_SKIP() << "Set WINSTELLAR_NEF to a camera RAW file to run this test";
+
+    auto bytes = read_file(p);
+    ASSERT_FALSE(bytes.empty());
+
+    auto full = fitsx::load_raw_from_memory(bytes.data(), bytes.size(), /*half_res=*/false);
+    auto half = fitsx::load_raw_from_memory(bytes.data(), bytes.size(), /*half_res=*/true);
+    ASSERT_TRUE(full.success) << full.error;
+    ASSERT_TRUE(half.success) << half.error;
+    EXPECT_TRUE(half.image.is_rgb());
+
+    // Half-size decode is ~half the linear resolution (a quarter of the pixels).
+    // LibRaw rounds, so allow a couple of pixels of slack.
+    EXPECT_NEAR(half.image.width,  full.image.width  / 2, 2);
+    EXPECT_NEAR(half.image.height, full.image.height / 2, 2);
+    EXPECT_LT(static_cast<size_t>(half.image.width) * half.image.height,
+              static_cast<size_t>(full.image.width) * full.image.height / 3);  // ~1/4
+}
+
 TEST(RawIntegration, MetadataOnlyParsesWithoutDemosaic) {
     const auto p = raw_test_path();
     if (p.empty() || !std::filesystem::exists(p))

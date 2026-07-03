@@ -84,7 +84,7 @@ bool is_raw(const void* buffer, size_t size) noexcept {
     return le || be;
 }
 
-LoadResult load_raw_from_memory(const void* buffer, size_t size) {
+LoadResult load_raw_from_memory(const void* buffer, size_t size, bool half_res) {
     LoadResult res;
     if (!buffer || size == 0) { res.error = "Empty buffer"; return res; }
 
@@ -117,6 +117,10 @@ LoadResult load_raw_from_memory(const void* buffer, size_t size) {
         // decode) at full resolution; the quality gap is invisible on-screen
         // and irrelevant for a viewer. See tools/raw_bench.cpp for the numbers.
         P.user_qual      = 0;
+        // Thumbnails: demosaic at half linear resolution (quarter the pixels)
+        // straight from the CFA. ~4x faster / a quarter of the RAM, and invisible
+        // once the frame is downsampled to a ~256 px thumbnail.
+        P.half_size      = half_res ? 1 : 0;
 
         rc = rp->unpack();
         if (rc != LIBRAW_SUCCESS) {

@@ -21,7 +21,13 @@ namespace fitsx {
 // Full decode: LibRaw unpack + demosaic to a linear 16-bit RGB image with
 // the camera's as-shot white balance, packed into FitsImage's three planes
 // so the existing RGB render / stretch / analysis paths apply unchanged.
-[[nodiscard]] LoadResult load_raw_from_memory(const void* buffer, size_t size);
+//
+// half_res=true sets LibRaw's half_size mode: it demosaics at half linear
+// resolution (a quarter of the pixels) directly from the CFA, ~4x faster and a
+// quarter of the memory. Used for thumbnails, where the result is downsampled
+// to ~256 px anyway so the half-resolution decode is visually identical.
+[[nodiscard]] LoadResult load_raw_from_memory(const void* buffer, size_t size,
+                                              bool half_res = false);
 
 // Metadata-only parse (LibRaw open_buffer, no unpack/demosaic). Used by the
 // property handler so scrolling a folder of RAWs in Explorer doesn't demosaic
