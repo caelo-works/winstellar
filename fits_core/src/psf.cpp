@@ -119,38 +119,51 @@ Moments adaptive_moments(const std::vector<float>& sub, int n, int iters = 12) {
     return r;
 }
 
+// Reusable scratch for is_star(), hoisted out of the per-candidate hot loop:
+// a dense field yields hundreds of candidates per zone across 9-25 zones, so
+// allocating these four vectors per call churned the heap thousands of times
+// per plate. Declared once by compute_psf_plate and cleared/overwritten here.
+struct IsStarScratch {
+    std::vector<float> w_buf;   // win*win, fully overwritten each call
+    std::vector<float> sub;     // win*win, fully overwritten each call
+    std::vector<float> annulus; // variable; cleared each call
+    std::vector<float> ann2;    // == annulus size; reassigned each call
+};
+
 // Quality gate on a candidate at region-local (y,x). Mirrors his is_star().
-bool is_star(const std::vector<float>& region, int h, int w, int y, int x, double& score) {
+bool is_star(const std::vector<float>& region, int h, int w, int y, int x,
+             double& score, IsStarScratch& sc) {
     constexpr int r = 9;
     if (y - r < 0 || x - r < 0 || y + r + 1 > h || x + r + 1 > w) return false;
     const int win = 2 * r + 1;
-    std::vector<float> w_buf(static_cast<size_t>(win) * win);
-    std::vector<float> annulus;
+    sc.w_buf.resize(static_cast<size_t>(win) * win);   // no-op after the first call
+    sc.annulus.clear();
     for (int j = -r; j <= r; ++j)
         for (int i = -r; i <= r; ++i) {
             const float v = region[static_cast<size_t>(y + j) * w + (x + i)];
-            w_buf[static_cast<size_t>(j + r) * win + (i + r)] = v;
+            sc.w_buf[static_cast<size_t>(j + r) * win + (i + r)] = v;
             const double rad = std::sqrt(static_cast<double>(i) * i + static_cast<double>(j) * j);
-            if (rad >= 6.0 && rad <= 8.5) annulus.push_back(v);
+            if (rad >= 6.0 && rad <= 8.5) sc.annulus.push_back(v);
         }
-    if (annulus.empty()) return false;
-    std::vector<float> ann2 = annulus;
-    const double bg = median_inplace(annulus);
-    for (auto& v : ann2) v = std::abs(v - static_cast<float>(bg));
-    double noise = 1.4826 * median_inplace(ann2);
+    if (sc.annulus.empty()) return false;
+    sc.ann2.assign(sc.annulus.begin(), sc.annulus.end());
+    const double bg = median_inplace(sc.annulus);
+    for (auto& v : sc.ann2) v = std::abs(v - static_cast<float>(bg));
+    double noise = 1.4826 * median_inplace(sc.ann2);
     if (noise <= 0.0) noise = 1e-6;
 
-    const double peak = w_buf[static_cast<size_t>(r) * win + r] - bg;
+    const double peak = sc.w_buf[static_cast<size_t>(r) * win + r] - bg;
     if (peak <= 0.0 || peak / noise < kSnrMin) return false;
 
-    const double nb = (w_buf[(r - 1) * win + r] + w_buf[(r + 1) * win + r]
-                     + w_buf[r * win + (r - 1)] + w_buf[r * win + (r + 1)]) / 4.0 - bg;
+    const double nb = (sc.w_buf[(r - 1) * win + r] + sc.w_buf[(r + 1) * win + r]
+                     + sc.w_buf[r * win + (r - 1)] + sc.w_buf[r * win + (r + 1)]) / 4.0 - bg;
     if (nb / peak < 0.35) return false;   // hot pixel / cosmic
 
-    std::vector<float> sub(static_cast<size_t>(win) * win);
+    sc.sub.resize(static_cast<size_t>(win) * win);
+    std::vector<float>& sub = sc.sub;
     double tot = 0.0;
     for (size_t i = 0; i < sub.size(); ++i) {
-        const double v = w_buf[i] - bg;
+        const double v = sc.w_buf[i] - bg;
         sub[i] = v > 0.0 ? static_cast<float>(v) : 0.0f;
         tot += sub[i];
     }
@@ -200,6 +213,7 @@ PsfPlate compute_psf_plate(const FitsImage& img, int grid, int nstar) {
     };
 
     std::vector<float> region, hp, stamp;
+    IsStarScratch is_star_scratch;   // reused across every candidate / zone
     for (int gy = 0; gy < grid; ++gy) {
         for (int gx = 0; gx < grid; ++gx) {
             PsfZone& zone = plate.zones[static_cast<size_t>(gy) * grid + gx];
@@ -241,7 +255,8 @@ PsfPlate compute_psf_plate(const FitsImage& img, int grid, int nstar) {
                             if (hp[static_cast<size_t>(y + j) * rw + (x + i)] > v) { ismax = false; break; }
                     if (!ismax) continue;
                     double score = 0.0;
-                    if (is_star(region, rh, rw, y, x, score)) cands.push_back({score, y, x});
+                    if (is_star(region, rh, rw, y, x, score, is_star_scratch))
+                        cands.push_back({score, y, x});
                 }
             }
             std::sort(cands.begin(), cands.end(),
