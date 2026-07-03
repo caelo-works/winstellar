@@ -366,7 +366,8 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     tilt_window_.create(hwnd_, hinst);
     background_window_.create(hwnd_, hinst);
 
-    worker_thread_ = std::thread([this] { worker_main(); });
+    worker_thread_  = std::thread([this] { worker_main(); });
+    inspect_thread_ = std::thread([this] { inspect_worker_main(); });
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -415,13 +416,15 @@ int ViewerWindow::run_message_loop() {
     }
     if (accel_) { ::DestroyAcceleratorTable(accel_); accel_ = nullptr; }
 
-    // Shut the render worker down before tearing down anything it might touch.
+    // Shut both workers down before tearing down anything they might touch.
     {
         std::lock_guard<std::mutex> lk(worker_mtx_);
         worker_quit_ = true;
     }
     worker_cv_.notify_all();
-    if (worker_thread_.joinable()) worker_thread_.join();
+    inspect_cv_.notify_all();
+    if (worker_thread_.joinable())  worker_thread_.join();
+    if (inspect_thread_.joinable()) inspect_thread_.join();
 
     histogram_.destroy();
     aberration_.destroy();
@@ -688,33 +691,22 @@ struct ViewerWindow::PsfResult {
 // on the previous file.
 void ViewerWindow::worker_main() {
     for (;;) {
-        bool do_load = false, do_render = false, do_detail = false;
+        bool do_load = false, do_render = false;
         std::wstring                                 load_path;
         StretchMode                                  load_mode = StretchMode::Auto;
         std::uint64_t                                load_gen = 0;
         std::shared_ptr<const fitsx::FitsImage>      render_img;
         fitsx::StretchParams                         render_params{};
         std::uint64_t                                render_gen = 0;
-        std::shared_ptr<const fitsx::FitsImage>      detail_img;
-        std::uint64_t                                detail_gen = 0;
-        bool                                         do_bg = false;
-        std::shared_ptr<const fitsx::FitsImage>      bg_img;
-        std::uint64_t                                bg_gen = 0;
-        bool                                         do_psf = false;
-        std::shared_ptr<const fitsx::FitsImage>      psf_img;
-        std::uint64_t                                psf_gen = 0;
-        int                                          psf_grid = 3;
 
         {
             std::unique_lock<std::mutex> lk(worker_mtx_);
             worker_cv_.wait(lk, [this] {
-                return worker_quit_ || pending_load_ || pending_render_ ||
-                       pending_detail_ || pending_bg_ || pending_psf_;
+                return worker_quit_ || pending_load_ || pending_render_;
             });
             if (worker_quit_) return;
-            // Priority: load (file switch) > detail (inspection) > render
-            // (slider) > background (least urgent). A fresh navigation always
-            // supersedes pending work on the previous file.
+            // Priority: load (file switch) > render (slider). A fresh navigation
+            // supersedes a pending re-stretch of the previous file.
             if (pending_load_) {
                 do_load           = true;
                 load_path         = std::move(pending_load_path_);
@@ -722,12 +714,6 @@ void ViewerWindow::worker_main() {
                 load_gen          = pending_load_gen_;
                 pending_load_     = false;
                 pending_load_path_.clear();
-            } else if (pending_detail_) {
-                do_detail         = true;
-                detail_img        = pending_detail_img_;
-                detail_gen        = pending_detail_gen_;
-                pending_detail_   = false;
-                pending_detail_img_.reset();
             } else if (pending_render_) {
                 do_render         = true;
                 render_img        = pending_render_img_;
@@ -735,19 +721,6 @@ void ViewerWindow::worker_main() {
                 render_gen        = pending_render_gen_;
                 pending_render_   = false;
                 pending_render_img_.reset();
-            } else if (pending_psf_) {
-                do_psf            = true;
-                psf_img           = pending_psf_img_;
-                psf_gen           = pending_psf_gen_;
-                psf_grid          = pending_psf_grid_;
-                pending_psf_      = false;
-                pending_psf_img_.reset();
-            } else if (pending_bg_) {
-                do_bg             = true;
-                bg_img            = pending_bg_img_;
-                bg_gen            = pending_bg_gen_;
-                pending_bg_       = false;
-                pending_bg_img_.reset();
             }
         }
 
@@ -826,16 +799,6 @@ void ViewerWindow::worker_main() {
                                static_cast<WPARAM>(load_gen),
                                reinterpret_cast<LPARAM>(ana.release()));
             }
-        } else if (do_detail) {
-            if (!detail_img || detail_img->data.empty()) continue;
-            try {
-                auto out = std::make_unique<DetailResult>();
-                out->gen    = detail_gen;
-                out->detail = fitsx::run_detailed_analysis(*detail_img);
-                ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
-                               static_cast<WPARAM>(detail_gen),
-                               reinterpret_cast<LPARAM>(out.release()));
-            } catch (...) { /* drop the overlay analysis rather than crash */ }
         } else if (do_render) {
             if (!render_img || render_img->data.empty()) continue;
             try {
@@ -845,17 +808,64 @@ void ViewerWindow::worker_main() {
                 ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop this render tick rather than crash */ }
-        } else if (do_bg) {
-            if (!bg_img || bg_img->data.empty()) continue;
+        }
+    }
+}
+
+void ViewerWindow::inspect_worker_main() {
+    // Second worker: the inspection-panel computes (per-star detail, PSF plate,
+    // background map). Kept off the primary worker so they never queue behind --
+    // or delay -- an interactive load/render, and vice-versa. Shares worker_mtx_
+    // and worker_quit_ with the primary worker; wakes on its own inspect_cv_.
+    for (;;) {
+        bool do_detail = false, do_psf = false, do_bg = false;
+        std::shared_ptr<const fitsx::FitsImage>      detail_img;
+        std::uint64_t                                detail_gen = 0;
+        std::shared_ptr<const fitsx::FitsImage>      psf_img;
+        std::uint64_t                                psf_gen = 0;
+        int                                          psf_grid = 3;
+        std::shared_ptr<const fitsx::FitsImage>      bg_img;
+        std::uint64_t                                bg_gen = 0;
+
+        {
+            std::unique_lock<std::mutex> lk(worker_mtx_);
+            inspect_cv_.wait(lk, [this] {
+                return worker_quit_ || pending_detail_ || pending_psf_ || pending_bg_;
+            });
+            if (worker_quit_) return;
+            // Priority: detail (main-view overlay) > psf (inspector) > bg (panel).
+            if (pending_detail_) {
+                do_detail       = true;
+                detail_img      = pending_detail_img_;
+                detail_gen      = pending_detail_gen_;
+                pending_detail_ = false;
+                pending_detail_img_.reset();
+            } else if (pending_psf_) {
+                do_psf          = true;
+                psf_img         = pending_psf_img_;
+                psf_gen         = pending_psf_gen_;
+                psf_grid        = pending_psf_grid_;
+                pending_psf_    = false;
+                pending_psf_img_.reset();
+            } else if (pending_bg_) {
+                do_bg           = true;
+                bg_img          = pending_bg_img_;
+                bg_gen          = pending_bg_gen_;
+                pending_bg_     = false;
+                pending_bg_img_.reset();
+            }
+        }
+
+        if (do_detail) {
+            if (!detail_img || detail_img->data.empty()) continue;
             try {
-                auto out = std::make_unique<BgResult>();
-                out->gen = bg_gen;
-                out->img = bg_img.get();
-                out->map = fitsx::compute_background(*bg_img);
-                ::PostMessageW(hwnd_, WM_APP_BG_DONE,
-                               static_cast<WPARAM>(bg_gen),
+                auto out = std::make_unique<DetailResult>();
+                out->gen    = detail_gen;
+                out->detail = fitsx::run_detailed_analysis(*detail_img);
+                ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
+                               static_cast<WPARAM>(detail_gen),
                                reinterpret_cast<LPARAM>(out.release()));
-            } catch (...) { /* drop the background map rather than crash */ }
+            } catch (...) { /* drop the overlay analysis rather than crash */ }
         } else if (do_psf) {
             if (!psf_img || psf_img->data.empty()) continue;
             try {
@@ -867,6 +877,17 @@ void ViewerWindow::worker_main() {
                                static_cast<WPARAM>(psf_gen),
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop the PSF plate rather than crash */ }
+        } else if (do_bg) {
+            if (!bg_img || bg_img->data.empty()) continue;
+            try {
+                auto out = std::make_unique<BgResult>();
+                out->gen = bg_gen;
+                out->img = bg_img.get();
+                out->map = fitsx::compute_background(*bg_img);
+                ::PostMessageW(hwnd_, WM_APP_BG_DONE,
+                               static_cast<WPARAM>(bg_gen),
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop the background map rather than crash */ }
         }
     }
 }
@@ -922,7 +943,7 @@ void ViewerWindow::request_detail() {
         pending_detail_gen_ = gen;
     }
     detail_pending_ = true;
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 void ViewerWindow::request_background() {
@@ -935,7 +956,7 @@ void ViewerWindow::request_background() {
         pending_bg_img_ = image_;
         pending_bg_gen_ = gen;
     }
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 void ViewerWindow::request_psf(int grid) {
@@ -949,7 +970,7 @@ void ViewerWindow::request_psf(int grid) {
         pending_psf_gen_  = gen;
         pending_psf_grid_ = grid;
     }
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 // Kick a detailed analysis if an overlay needs one and we don't have it yet.

@@ -175,7 +175,8 @@ private:
     //
     // Load takes priority over render: a fresh navigation against a new
     // file always supersedes a pending re-stretch of the previous one.
-    void worker_main();
+    void worker_main();          // primary: load + render
+    void inspect_worker_main();  // secondary: detail + psf + background
     void request_load (const std::wstring& path);
     void request_render(const fitsx::StretchParams& p);
     void request_detail();
@@ -202,8 +203,14 @@ private:
 
     std::thread             worker_thread_;
     std::mutex              worker_mtx_;
-    std::condition_variable worker_cv_;
+    std::condition_variable worker_cv_;         // wakes the primary (load/render) worker
     bool                    worker_quit_ = false;
+
+    // Second worker: inspection-panel computes (detail / PSF / background) so
+    // they never serialize behind -- or delay -- an interactive load/render.
+    // Shares worker_mtx_ + worker_quit_ with the primary worker.
+    std::thread             inspect_thread_;
+    std::condition_variable inspect_cv_;
 
     // load slot
     bool                                       pending_load_       = false;
