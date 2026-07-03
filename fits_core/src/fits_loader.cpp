@@ -174,24 +174,56 @@ LoadResult load_from_fitsfile(fitsfile* fptr) {
             }
         }
     };
+    // In-place vertical flip: swap row y with row (height-1-y), sanitizing +
+    // folding min/max as we go. Lets a single-plane source (mono, or each
+    // demosaiced plane) be std::move()d straight into the destination instead
+    // of copied into a fresh buffer -- avoids holding two full-frame copies of
+    // every plane at once (the OSC path peaked at ~7 full-frame buffers).
+    // Bit-identical output to flip_into.
+    auto flip_in_place = [&](std::vector<float>& v) {
+        for (long y = 0; y < height / 2; ++y) {
+            float* a = v.data() + static_cast<size_t>(y) * width;
+            float* b = v.data() + static_cast<size_t>(height - 1 - y) * width;
+            for (long x = 0; x < width; ++x) {
+                float va = a[x], vb = b[x];
+                if (!std::isfinite(va)) va = 0.0f;
+                if (!std::isfinite(vb)) vb = 0.0f;
+                a[x] = vb; b[x] = va;              // swap -> top-down
+                if (vb < vmin) vmin = vb; if (vb > vmax) vmax = vb;
+                if (va < vmin) vmin = va; if (va > vmax) vmax = va;
+            }
+        }
+        if (height & 1) {                          // middle row stays put
+            float* m = v.data() + static_cast<size_t>(height / 2) * width;
+            for (long x = 0; x < width; ++x) {
+                if (!std::isfinite(m[x])) m[x] = 0.0f;
+                if (m[x] < vmin) vmin = m[x]; if (m[x] > vmax) vmax = m[x];
+            }
+        }
+    };
 
     if (color_cube) {
+        // raw holds all three planes contiguously, so it can't be moved apart;
+        // copy each out (this NAXIS3=3 path is uncommon).
         flip_into(raw.data(),                 res.image.data);
         flip_into(raw.data() + npix,          res.image.data_g);
         flip_into(raw.data() + 2 * npix,      res.image.data_b);
     } else if (bayer != BayerPattern::None) {
-        // Sanitize in native order, demosaic, gray-world balance, then flip
-        // all three reconstructed planes top-down.
+        // Sanitize in native order, demosaic, gray-world balance, then flip each
+        // reconstructed plane in place and MOVE it into the image.
         for (float& v : raw) { if (!std::isfinite(v)) v = 0.0f; }
         std::vector<float> rr, gg, bb;
         debayer_bilinear(raw, static_cast<int>(width), static_cast<int>(height),
                          bayer, bxoff, byoff, rr, gg, bb);
+        std::vector<float>().swap(raw);    // CFA no longer needed -> free it
         gray_world_balance(rr, gg, bb);
-        flip_into(rr.data(), res.image.data);
-        flip_into(gg.data(), res.image.data_g);
-        flip_into(bb.data(), res.image.data_b);
+        flip_in_place(rr); flip_in_place(gg); flip_in_place(bb);
+        res.image.data   = std::move(rr);
+        res.image.data_g = std::move(gg);
+        res.image.data_b = std::move(bb);
     } else {
-        flip_into(raw.data(), res.image.data);
+        flip_in_place(raw);                // mono: flip the CFA-free single plane
+        res.image.data = std::move(raw);   // and hand the buffer over directly
     }
     if (!std::isfinite(vmin) || vmax <= vmin) { vmin = 0.0f; vmax = 1.0f; }
 
