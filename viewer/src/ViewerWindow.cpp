@@ -5,6 +5,7 @@
 #include "fits_core/fits_loader.h"
 #include "fits_core/analysis.h"
 #include "fits_core/background.h"
+#include "fits_core/psf.h"
 #include "fits_core/cache.h"
 
 #include <commdlg.h>
@@ -208,6 +209,8 @@ constexpr UINT  WM_APP_RENDER_DONE = WM_APP + 2;
 constexpr UINT  WM_APP_DETAIL_DONE = WM_APP + 3;
 // Background-map worker → UI postback. lParam = ViewerWindow::BgResult*.
 constexpr UINT  WM_APP_BG_DONE = WM_APP + 4;
+// PSF-plate worker → UI postback. lParam = ViewerWindow::PsfResult*.
+constexpr UINT  WM_APP_PSF_DONE = WM_APP + 5;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -509,6 +512,10 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             self->on_bg_finished(static_cast<std::uint64_t>(wp),
                                  reinterpret_cast<BgResult*>(lp));
             return 0;
+        case WM_APP_PSF_DONE:
+            self->on_psf_finished(static_cast<std::uint64_t>(wp),
+                                  reinterpret_cast<PsfResult*>(lp));
+            return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
             ::PostQuitMessage(0);
@@ -657,6 +664,12 @@ struct ViewerWindow::BgResult {
     fitsx::BackgroundMap  map;
 };
 
+struct ViewerWindow::PsfResult {
+    std::uint64_t    gen = 0;
+    int              grid = 3;               // grid the plate was computed at
+    fitsx::PsfPlate  plate;
+};
+
 // Unified worker. Sleeps on worker_cv_, wakes when pending_load_ or
 // pending_render_ is set (or on shutdown via worker_quit_). Load takes
 // priority over render so a file switch always supersedes a slider drag
@@ -675,12 +688,16 @@ void ViewerWindow::worker_main() {
         bool                                         do_bg = false;
         std::shared_ptr<const fitsx::FitsImage>      bg_img;
         std::uint64_t                                bg_gen = 0;
+        bool                                         do_psf = false;
+        std::shared_ptr<const fitsx::FitsImage>      psf_img;
+        std::uint64_t                                psf_gen = 0;
+        int                                          psf_grid = 3;
 
         {
             std::unique_lock<std::mutex> lk(worker_mtx_);
             worker_cv_.wait(lk, [this] {
                 return worker_quit_ || pending_load_ || pending_render_ ||
-                       pending_detail_ || pending_bg_;
+                       pending_detail_ || pending_bg_ || pending_psf_;
             });
             if (worker_quit_) return;
             // Priority: load (file switch) > detail (inspection) > render
@@ -706,6 +723,13 @@ void ViewerWindow::worker_main() {
                 render_gen        = pending_render_gen_;
                 pending_render_   = false;
                 pending_render_img_.reset();
+            } else if (pending_psf_) {
+                do_psf            = true;
+                psf_img           = pending_psf_img_;
+                psf_gen           = pending_psf_gen_;
+                psf_grid          = pending_psf_grid_;
+                pending_psf_      = false;
+                pending_psf_img_.reset();
             } else if (pending_bg_) {
                 do_bg             = true;
                 bg_img            = pending_bg_img_;
@@ -802,6 +826,17 @@ void ViewerWindow::worker_main() {
                                static_cast<WPARAM>(bg_gen),
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop the background map rather than crash */ }
+        } else if (do_psf) {
+            if (!psf_img || psf_img->data.empty()) continue;
+            try {
+                auto out = std::make_unique<PsfResult>();
+                out->gen   = psf_gen;
+                out->grid  = psf_grid;
+                out->plate = fitsx::compute_psf_plate(*psf_img, psf_grid, 4);
+                ::PostMessageW(hwnd_, WM_APP_PSF_DONE,
+                               static_cast<WPARAM>(psf_gen),
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop the PSF plate rather than crash */ }
         }
     }
 }
@@ -873,6 +908,20 @@ void ViewerWindow::request_background() {
     worker_cv_.notify_one();
 }
 
+void ViewerWindow::request_psf(int grid) {
+    if (!image_) return;
+    const std::uint64_t gen =
+        psf_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        pending_psf_      = true;
+        pending_psf_img_  = image_;
+        pending_psf_gen_  = gen;
+        pending_psf_grid_ = grid;
+    }
+    worker_cv_.notify_one();
+}
+
 // Kick a detailed analysis if an overlay needs one and we don't have it yet.
 void ViewerWindow::ensure_detailed() {
     if (!image_) return;
@@ -902,6 +951,16 @@ void ViewerWindow::on_bg_finished(std::uint64_t gen, BgResult* raw) {
     background_window_.set_map(std::move(r->map));
 }
 
+void ViewerWindow::on_psf_finished(std::uint64_t gen, PsfResult* raw) {
+    std::unique_ptr<PsfResult> r(raw);
+    // Drop stale results (image changed while the plate was computing).
+    if (gen != psf_gen_latest_.load(std::memory_order_relaxed)) return;
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+    // ...and drop it if the user changed the grid since we requested.
+    if (r->grid != aberration_.grid()) return;
+    aberration_.set_plate(std::move(r->plate), r->grid);
+}
+
 // Recompute the tilt result from the current detailed analysis and push it to
 // the popup (no-op if the popup is hidden or the analysis isn't ready yet).
 void ViewerWindow::refresh_tilt_window() {
@@ -927,8 +986,14 @@ void ViewerWindow::refresh_tilt_window() {
 void ViewerWindow::push_aberration() {
     if (!aberration_.is_visible()) return;
     aberration_.set_rotation(rotation_deg_);   // match the on-screen orientation
-    aberration_.set_image(image_);       // Inspecté: PSF plate from the linear image
+    aberration_.set_image(image_);       // Inspecté: stores the linear image
     aberration_.set_source(rendered_);   // Visuel: crops from the rendered frame
+    // Inspected mode needs a PSF plate -- compute it off the UI thread (it lands
+    // via on_psf_finished -> aberration_.set_plate). needs_plate() is false once
+    // the plate for this image/grid is in, so rotation/re-stretch don't re-run it.
+    if (aberration_.mode() == AberrationWindow::Mode::Inspected &&
+        aberration_.needs_plate())
+        request_psf(aberration_.grid());
 }
 
 // Compute the sky-background map (linear image, stretch-independent) and push it
