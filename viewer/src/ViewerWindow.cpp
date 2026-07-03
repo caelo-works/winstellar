@@ -206,6 +206,8 @@ constexpr UINT  WM_APP_LOAD_DONE   = WM_APP + 1;
 constexpr UINT  WM_APP_RENDER_DONE = WM_APP + 2;
 // Detailed-analysis worker → UI postback. lParam = ViewerWindow::DetailResult*.
 constexpr UINT  WM_APP_DETAIL_DONE = WM_APP + 3;
+// Background-map worker → UI postback. lParam = ViewerWindow::BgResult*.
+constexpr UINT  WM_APP_BG_DONE = WM_APP + 4;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -503,6 +505,10 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             self->on_detail_finished(static_cast<std::uint64_t>(wp),
                                      reinterpret_cast<DetailResult*>(lp));
             return 0;
+        case WM_APP_BG_DONE:
+            self->on_bg_finished(static_cast<std::uint64_t>(wp),
+                                 reinterpret_cast<BgResult*>(lp));
+            return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
             ::PostQuitMessage(0);
@@ -645,6 +651,12 @@ struct ViewerWindow::DetailResult {
     fitsx::DetailedAnalysis detail;
 };
 
+struct ViewerWindow::BgResult {
+    std::uint64_t         gen = 0;
+    const fitsx::FitsImage* img = nullptr;   // image the map was built for
+    fitsx::BackgroundMap  map;
+};
+
 // Unified worker. Sleeps on worker_cv_, wakes when pending_load_ or
 // pending_render_ is set (or on shutdown via worker_quit_). Load takes
 // priority over render so a file switch always supersedes a slider drag
@@ -660,16 +672,20 @@ void ViewerWindow::worker_main() {
         std::uint64_t                                render_gen = 0;
         std::shared_ptr<const fitsx::FitsImage>      detail_img;
         std::uint64_t                                detail_gen = 0;
+        bool                                         do_bg = false;
+        std::shared_ptr<const fitsx::FitsImage>      bg_img;
+        std::uint64_t                                bg_gen = 0;
 
         {
             std::unique_lock<std::mutex> lk(worker_mtx_);
             worker_cv_.wait(lk, [this] {
-                return worker_quit_ || pending_load_ || pending_render_ || pending_detail_;
+                return worker_quit_ || pending_load_ || pending_render_ ||
+                       pending_detail_ || pending_bg_;
             });
             if (worker_quit_) return;
             // Priority: load (file switch) > detail (inspection) > render
-            // (slider). A fresh navigation always supersedes pending work on
-            // the previous file.
+            // (slider) > background (least urgent). A fresh navigation always
+            // supersedes pending work on the previous file.
             if (pending_load_) {
                 do_load           = true;
                 load_path         = std::move(pending_load_path_);
@@ -690,6 +706,12 @@ void ViewerWindow::worker_main() {
                 render_gen        = pending_render_gen_;
                 pending_render_   = false;
                 pending_render_img_.reset();
+            } else if (pending_bg_) {
+                do_bg             = true;
+                bg_img            = pending_bg_img_;
+                bg_gen            = pending_bg_gen_;
+                pending_bg_       = false;
+                pending_bg_img_.reset();
             }
         }
 
@@ -769,6 +791,17 @@ void ViewerWindow::worker_main() {
                 ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop this render tick rather than crash */ }
+        } else if (do_bg) {
+            if (!bg_img || bg_img->data.empty()) continue;
+            try {
+                auto out = std::make_unique<BgResult>();
+                out->gen = bg_gen;
+                out->img = bg_img.get();
+                out->map = fitsx::compute_background(*bg_img);
+                ::PostMessageW(hwnd_, WM_APP_BG_DONE,
+                               static_cast<WPARAM>(bg_gen),
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop the background map rather than crash */ }
         }
     }
 }
@@ -827,6 +860,19 @@ void ViewerWindow::request_detail() {
     worker_cv_.notify_one();
 }
 
+void ViewerWindow::request_background() {
+    if (!image_) return;
+    const std::uint64_t gen =
+        bg_gen_latest_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        pending_bg_     = true;
+        pending_bg_img_ = image_;
+        pending_bg_gen_ = gen;
+    }
+    worker_cv_.notify_one();
+}
+
 // Kick a detailed analysis if an overlay needs one and we don't have it yet.
 void ViewerWindow::ensure_detailed() {
     if (!image_) return;
@@ -845,6 +891,15 @@ void ViewerWindow::on_detail_finished(std::uint64_t gen, DetailResult* raw) {
     // Overlays consume detailed_; repaint now that the data is available.
     if (any_overlay_active()) invalidate_viewport();
     refresh_tilt_window();
+}
+
+void ViewerWindow::on_bg_finished(std::uint64_t gen, BgResult* raw) {
+    std::unique_ptr<BgResult> r(raw);
+    // Drop stale results (image changed while the map was computing).
+    if (gen != bg_gen_latest_.load(std::memory_order_relaxed)) return;
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+    // bg_for_ was set to this image when the request was posted.
+    background_window_.set_map(std::move(r->map));
 }
 
 // Recompute the tilt result from the current detailed analysis and push it to
@@ -883,8 +938,11 @@ void ViewerWindow::push_background() {
     background_window_.set_rotation(rotation_deg_);   // mirror the on-screen orientation
     if (!image_) { background_window_.clear(); bg_for_ = nullptr; return; }
     if (image_.get() != bg_for_) {
-        background_window_.set_map(fitsx::compute_background(*image_));
+        // Compute off the UI thread -- compute_background scans every pixel and
+        // fits an ABE surface (seconds on a big frame). Mark bg_for_ now so we
+        // don't re-request the same image; the map lands via on_bg_finished.
         bg_for_ = image_.get();
+        request_background();
     }
 }
 

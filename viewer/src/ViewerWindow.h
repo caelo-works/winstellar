@@ -182,6 +182,13 @@ private:
     struct DetailResult;
     void on_detail_finished(std::uint64_t gen, DetailResult* r);
 
+    // Background map, computed off the UI thread (scans every pixel + fits an
+    // ABE surface -- seconds on a big frame; used to run inline in
+    // push_background and freeze the UI).
+    void request_background();
+    struct BgResult;
+    void on_bg_finished(std::uint64_t gen, BgResult* r);
+
     std::thread             worker_thread_;
     std::mutex              worker_mtx_;
     std::condition_variable worker_cv_;
@@ -204,9 +211,15 @@ private:
     std::shared_ptr<const fitsx::FitsImage>    pending_detail_img_;
     std::uint64_t                              pending_detail_gen_     = 0;
 
+    // background slot (sky-background / illumination map)
+    bool                                       pending_bg_             = false;
+    std::shared_ptr<const fitsx::FitsImage>    pending_bg_img_;
+    std::uint64_t                              pending_bg_gen_         = 0;
+
     // UI-visible atomic mirrors -- on_*_finished compares the result's gen
     // against the latest to drop stale results.
     std::atomic<std::uint64_t> load_gen_latest_  {0};
     std::atomic<std::uint64_t> render_gen_latest_{0};
     std::atomic<std::uint64_t> detail_gen_latest_{0};
+    std::atomic<std::uint64_t> bg_gen_latest_    {0};
 };
