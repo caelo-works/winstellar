@@ -252,3 +252,56 @@ TEST(FitsMetadata, HeaderOnlyParseSurvivesTruncation) {
         if (h.key == "OBJECT") { found_object = true; break; }
     EXPECT_TRUE(found_object) << "OBJECT keyword missing from header-only parse";
 }
+
+// ---------------------------------------------------------------------------
+//  Robustness: malformed / truncated / hostile buffers must fail cleanly --
+//  return !success, never throw or crash. This is the class of input the
+//  in-process Explorer shell handlers face (guarded loaders + #2 try/catch).
+// ---------------------------------------------------------------------------
+
+TEST(Robustness, NullAndTinyBuffersFailCleanly) {
+    EXPECT_NO_THROW({ auto r = fitsx::load_from_memory(nullptr, 0);
+                      EXPECT_FALSE(r.success); });
+    const uint8_t one = 0x42;
+    EXPECT_NO_THROW({ auto r = fitsx::load_from_memory(&one, 1);
+                      EXPECT_FALSE(r.success); });
+}
+
+TEST(Robustness, GarbageBufferFailsCleanly) {
+    std::vector<uint8_t> g(8000);
+    uint32_t s = 0x12345678u;
+    for (auto& b : g) { s = s * 1103515245u + 12345u; b = static_cast<uint8_t>(s >> 16); }
+    EXPECT_NO_THROW({ auto r = fitsx::load_from_memory(g.data(), g.size());
+                      EXPECT_FALSE(r.success); });
+}
+
+TEST(Robustness, TruncatedFitsDoesNotThrowOrCrash) {
+    // A valid FITS header whose pixel data is cut off at various points. The
+    // property we guarantee is *no throw / no crash / no out-of-bounds read* --
+    // CFITSIO may be lenient and zero-fill a mildly truncated frame (success) or
+    // reject it (error); both are fine as long as it stays contained.
+    TempFitsFile f("trunc");
+    auto spec = wst::make_constant(64, 64, 1000.0f);
+    ASSERT_FALSE(wst::write_synth_fits(f.utf8(), spec).empty());
+    auto bytes = read_all_bytes(f.utf16());
+    ASSERT_GT(bytes.size(), 2880u);
+    for (size_t keep : { size_t(16), size_t(2880), bytes.size() / 2, bytes.size() - 16 }) {
+        SCOPED_TRACE("keep=" + std::to_string(keep));
+        EXPECT_NO_THROW({
+            volatile bool ok = fitsx::load_from_memory(bytes.data(), keep).success;
+            (void)ok;
+        });
+    }
+}
+
+TEST(Robustness, CorruptedFitsMagicFailsCleanly) {
+    TempFitsFile f("badmagic");
+    auto spec = wst::make_constant(32, 32, 100.0f);
+    ASSERT_FALSE(wst::write_synth_fits(f.utf8(), spec).empty());
+    auto bytes = read_all_bytes(f.utf16());
+    ASSERT_GT(bytes.size(), 6u);
+    // Clobber the "SIMPLE" card so nothing claims the buffer.
+    bytes[0] = 'X'; bytes[1] = 'X'; bytes[2] = 'X';
+    EXPECT_NO_THROW({ auto r = fitsx::load_from_memory(bytes.data(), bytes.size());
+                      EXPECT_FALSE(r.success); });
+}
