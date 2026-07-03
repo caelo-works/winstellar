@@ -71,7 +71,8 @@ private:
     LRESULT on_bar_customdraw(LPNMTBCUSTOMDRAW nm) const;
 
     void build_visual(const fitsx::RenderedBitmap& rb);  // (re)extract Visuel crops
-    void build_inspected();                              // (re)compute the PSF plate
+    void build_inspected();          // (re)compute the PSF plate (expensive)
+    void rebuild_inspected_display(); // rebuild rotated display zones from plate_
 
     static constexpr int kBarH = 40;
 
@@ -119,6 +120,7 @@ private:
     std::shared_ptr<const fitsx::FitsImage> img_;
     const fitsx::FitsImage*   plate_for_ = nullptr;   // image the plate was built for
     int                       plate_grid_ = 0;
+    fitsx::PsfPlate           plate_;                 // cached detection (rotation-independent)
     std::vector<DispZone>      dzones_;                // displayed-grid order
     bool have_plate_ = false;
 

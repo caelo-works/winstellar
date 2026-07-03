@@ -326,10 +326,18 @@ void AberrationWindow::set_rotation(int deg) {
     deg = ((deg % 360) + 360) % 360;
     if (deg == rot_) return;
     rot_ = deg;
-    plate_for_ = nullptr;     // force the inspected plate to rebuild rotated
     have_crops_ = false;      // visual re-extracts on the next set_source
+    // The PSF plate (star detection) is rotation-independent -- only the display
+    // stamps rotate. If the cached plate is still valid for this image/grid, keep
+    // it and just re-rotate the stamps (milliseconds) instead of re-running the
+    // multi-second detection. plate_for_ is left set so the set_image() the
+    // viewer sends right after sees a cache hit and skips the recompute.
+    if (plate_.success && img_ && plate_for_ == img_.get() && plate_grid_ == grid_) {
+        rebuild_inspected_display();
+    } else {
+        plate_for_ = nullptr;   // no valid cached plate -> full rebuild later
+    }
     if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
-    // The viewer re-pushes image + frame right after, which rebuilds both modes.
 }
 
 void AberrationWindow::clear() {
@@ -389,14 +397,29 @@ void AberrationWindow::build_visual(const fitsx::RenderedBitmap& rb) {
 }
 
 void AberrationWindow::build_inspected() {
+    // Expensive half: run the PSF plate (detection + moments) and cache it, so a
+    // later rotation only re-rotates the display stamps (see set_rotation).
+    if (!img_ || img_->empty()) {
+        for (auto& z : dzones_) for (auto& s : z.stars) safe_release(s.tex);
+        dzones_.clear(); have_plate_ = false; plate_ = {};
+        plate_for_ = nullptr;
+        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+    plate_ = fitsx::compute_psf_plate(*img_, grid_, 4);
+    plate_for_ = img_.get(); plate_grid_ = grid_;
+    rebuild_inspected_display();
+}
+
+void AberrationWindow::rebuild_inspected_display() {
+    // Cheap half: turn the cached plate into rotated, displayed-order stamps.
+    // Re-runnable on rotation without re-detecting stars.
     for (auto& z : dzones_) for (auto& s : z.stars) safe_release(s.tex);
     dzones_.clear(); have_plate_ = false;
-    if (!img_ || img_->empty()) { if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return; }
-
-    const fitsx::PsfPlate plate = fitsx::compute_psf_plate(*img_, grid_, 4);
-    plate_for_ = img_.get(); plate_grid_ = grid_;
-    if (!plate.success || static_cast<int>(plate.zones.size()) != grid_ * grid_) {
-        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE); return;
+    if (!img_ || !plate_.success ||
+        static_cast<int>(plate_.zones.size()) != grid_ * grid_) {
+        if (hwnd_) ::InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
     }
 
     const int N = grid_;
@@ -407,7 +430,7 @@ void AberrationWindow::build_inspected() {
         for (int dc = 0; dc < N; ++dc) {
             int sr, sc;
             disp_to_src_cell(dr, dc, N, rot_, sr, sc);
-            const fitsx::PsfZone& z = plate.zones[static_cast<size_t>(sr) * N + sc];
+            const fitsx::PsfZone& z = plate_.zones[static_cast<size_t>(sr) * N + sc];
             DispZone& dz = dzones_[static_cast<size_t>(dr) * N + dc];
             dz.elong = z.elong_median; dz.ecc = z.ecc_median; dz.axis = z.axis;
             for (const auto& star : z.stars) {
