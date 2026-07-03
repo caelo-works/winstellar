@@ -11,6 +11,7 @@
 #include "Registration.h"
 #include "ThumbnailProvider.h"
 
+#include <delayimp.h>
 #include <new>
 
 HMODULE g_hInst = nullptr;
@@ -26,6 +27,38 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID) {
     }
     return TRUE;
 }
+
+// Delay-load hook (#5). The vendored dependency DLLs (cfitsio / sqlite3 /
+// pugixml / raw_r, listed via /DELAYLOAD) are resolved here ONLY from this
+// module's own directory -- never from the process CWD or PATH -- so a DLL
+// planted alongside a FITS/RAW file (or on PATH) can't be loaded into
+// explorer.exe. LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR extends the same protection to
+// each dependency's transitive deps (z.dll, pthreadVC3.dll, lcms2-2.dll);
+// LOAD_LIBRARY_SEARCH_SYSTEM32 still lets the CRT / system DLLs resolve.
+static FARPROC WINAPI winstellar_dli_hook(unsigned event, PDelayLoadInfo info) {
+    if (event != dliNotePreLoadLibrary || !info || !info->szDll) return nullptr;
+
+    wchar_t path[MAX_PATH];
+    DWORD n = ::GetModuleFileNameW(g_hInst, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return nullptr;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) return nullptr;
+    slash[1] = L'\0';   // keep the trailing backslash, drop the file name
+
+    wchar_t wdll[MAX_PATH];
+    if (::MultiByteToWideChar(CP_ACP, 0, info->szDll, -1, wdll, MAX_PATH) == 0)
+        return nullptr;
+    if (wcslen(path) + wcslen(wdll) >= MAX_PATH) return nullptr;
+    wcscat_s(path, MAX_PATH, wdll);
+
+    // Absolute path + these flags => loaded strictly from our directory / System32.
+    HMODULE h = ::LoadLibraryExW(
+        path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    return reinterpret_cast<FARPROC>(h);
+}
+
+// The delay-load helper picks this up by name (declared in delayimp.h).
+extern "C" const PfnDliHook __pfnDliNotifyHook2 = winstellar_dli_hook;
 
 extern "C" HRESULT WINAPI
 DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {

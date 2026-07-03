@@ -27,6 +27,23 @@ target_link_libraries(WinStellarShellExt PRIVATE
     gdi32
 )
 
+# Harden the DLL search order for the vendored dependency DLLs (#5). This DLL is
+# loaded in-process inside explorer.exe; by default its implicit imports would be
+# resolved via a search that includes the process CWD and PATH, so a planted
+# cfitsio.dll / sqlite3.dll / pugixml.dll / raw_r.dll could be loaded into
+# Explorer. Delay-load them and resolve each from this module's own directory via
+# the __pfnDliNotifyHook2 hook in dllmain.cpp (which also protects their
+# transitive deps: z.dll, pthreadVC3.dll, lcms2-2.dll).
+if(MSVC)
+    target_link_libraries(WinStellarShellExt PRIVATE delayimp)
+    target_link_options(WinStellarShellExt PRIVATE
+        /DELAYLOAD:cfitsio.dll
+        /DELAYLOAD:sqlite3.dll
+        /DELAYLOAD:pugixml.dll
+        /DELAYLOAD:raw_r.dll
+    )
+endif()
+
 set_target_properties(WinStellarShellExt PROPERTIES
     OUTPUT_NAME "WinStellarShellExt"
     PREFIX ""
