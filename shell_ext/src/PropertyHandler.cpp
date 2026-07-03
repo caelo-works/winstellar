@@ -180,7 +180,7 @@ void FitsPropertyHandler::populate() {
             // Camera RAW: pull EXIF only (no demosaic). Decoding a 24 Mpx
             // frame just to fill columns would choke Explorer when scrolling
             // a folder of NEFs; pixel stats / HFR are skipped for RAW in v1.
-            // 4 MB (kRawHeaderCap) covers the EXIF/TIFF IFDs of any real camera
+            // 2 MB (kRawHeaderCap) covers the EXIF/TIFF IFDs of any real camera
             // RAW; if a pathological file hid them further in, columns are simply
             // dropped for that file rather than paying a 32 MB read on every NEF.
             auto m = fitsx::parse_raw_metadata(buf_.data(), buf_.size());
