@@ -211,6 +211,8 @@ constexpr UINT  WM_APP_DETAIL_DONE = WM_APP + 3;
 constexpr UINT  WM_APP_BG_DONE = WM_APP + 4;
 // PSF-plate worker → UI postback. lParam = ViewerWindow::PsfResult*.
 constexpr UINT  WM_APP_PSF_DONE = WM_APP + 5;
+// Load's analysis half → UI postback. lParam = ViewerWindow::LoadAnalysis*.
+constexpr UINT  WM_APP_ANALYSIS_DONE = WM_APP + 6;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -364,7 +366,8 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     tilt_window_.create(hwnd_, hinst);
     background_window_.create(hwnd_, hinst);
 
-    worker_thread_ = std::thread([this] { worker_main(); });
+    worker_thread_  = std::thread([this] { worker_main(); });
+    inspect_thread_ = std::thread([this] { inspect_worker_main(); });
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -413,13 +416,15 @@ int ViewerWindow::run_message_loop() {
     }
     if (accel_) { ::DestroyAcceleratorTable(accel_); accel_ = nullptr; }
 
-    // Shut the render worker down before tearing down anything it might touch.
+    // Shut both workers down before tearing down anything they might touch.
     {
         std::lock_guard<std::mutex> lk(worker_mtx_);
         worker_quit_ = true;
     }
     worker_cv_.notify_all();
-    if (worker_thread_.joinable()) worker_thread_.join();
+    inspect_cv_.notify_all();
+    if (worker_thread_.joinable())  worker_thread_.join();
+    if (inspect_thread_.joinable()) inspect_thread_.join();
 
     histogram_.destroy();
     aberration_.destroy();
@@ -515,6 +520,10 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_APP_PSF_DONE:
             self->on_psf_finished(static_cast<std::uint64_t>(wp),
                                   reinterpret_cast<PsfResult*>(lp));
+            return 0;
+        case WM_APP_ANALYSIS_DONE:
+            self->on_load_analysis_finished(static_cast<std::uint64_t>(wp),
+                                            reinterpret_cast<LoadAnalysis*>(lp));
             return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
@@ -633,13 +642,19 @@ struct ViewerWindow::LoadResult {
     bool                  success = false;
     std::string           error;
     std::wstring          path;
-    fitsx::FitsImage      image;
+    // shared_ptr so the worker can keep reading the image for the analysis pass
+    // after handing it to the UI thread (both are read-only -- FitsImage is
+    // const once loaded).
+    std::shared_ptr<const fitsx::FitsImage> image;
     fitsx::StretchParams  stretch;
     fitsx::RenderedBitmap rendered;
-    fitsx::AnalysisResult analysis;
-    // When analysis was computed fresh (cache miss), the full per-star detail is
-    // carried along so the first overlay reuses it instead of re-running a whole
-    // detection pass. Empty on a cache hit (detail isn't cached).
+};
+
+// The analysis half of a load, posted after the image so the frame paints first.
+struct ViewerWindow::LoadAnalysis {
+    fitsx::AnalysisResult   analysis;
+    // On a cache miss the full per-star detail is carried along so the first
+    // overlay reuses it. Empty on a cache hit (detail isn't cached).
     fitsx::DetailedAnalysis detail;
     bool                    has_detail = false;
 };
@@ -676,33 +691,22 @@ struct ViewerWindow::PsfResult {
 // on the previous file.
 void ViewerWindow::worker_main() {
     for (;;) {
-        bool do_load = false, do_render = false, do_detail = false;
+        bool do_load = false, do_render = false;
         std::wstring                                 load_path;
         StretchMode                                  load_mode = StretchMode::Auto;
         std::uint64_t                                load_gen = 0;
         std::shared_ptr<const fitsx::FitsImage>      render_img;
         fitsx::StretchParams                         render_params{};
         std::uint64_t                                render_gen = 0;
-        std::shared_ptr<const fitsx::FitsImage>      detail_img;
-        std::uint64_t                                detail_gen = 0;
-        bool                                         do_bg = false;
-        std::shared_ptr<const fitsx::FitsImage>      bg_img;
-        std::uint64_t                                bg_gen = 0;
-        bool                                         do_psf = false;
-        std::shared_ptr<const fitsx::FitsImage>      psf_img;
-        std::uint64_t                                psf_gen = 0;
-        int                                          psf_grid = 3;
 
         {
             std::unique_lock<std::mutex> lk(worker_mtx_);
             worker_cv_.wait(lk, [this] {
-                return worker_quit_ || pending_load_ || pending_render_ ||
-                       pending_detail_ || pending_bg_ || pending_psf_;
+                return worker_quit_ || pending_load_ || pending_render_;
             });
             if (worker_quit_) return;
-            // Priority: load (file switch) > detail (inspection) > render
-            // (slider) > background (least urgent). A fresh navigation always
-            // supersedes pending work on the previous file.
+            // Priority: load (file switch) > render (slider). A fresh navigation
+            // supersedes a pending re-stretch of the previous file.
             if (pending_load_) {
                 do_load           = true;
                 load_path         = std::move(pending_load_path_);
@@ -710,12 +714,6 @@ void ViewerWindow::worker_main() {
                 load_gen          = pending_load_gen_;
                 pending_load_     = false;
                 pending_load_path_.clear();
-            } else if (pending_detail_) {
-                do_detail         = true;
-                detail_img        = pending_detail_img_;
-                detail_gen        = pending_detail_gen_;
-                pending_detail_   = false;
-                pending_detail_img_.reset();
             } else if (pending_render_) {
                 do_render         = true;
                 render_img        = pending_render_img_;
@@ -723,19 +721,6 @@ void ViewerWindow::worker_main() {
                 render_gen        = pending_render_gen_;
                 pending_render_   = false;
                 pending_render_img_.reset();
-            } else if (pending_psf_) {
-                do_psf            = true;
-                psf_img           = pending_psf_img_;
-                psf_gen           = pending_psf_gen_;
-                psf_grid          = pending_psf_grid_;
-                pending_psf_      = false;
-                pending_psf_img_.reset();
-            } else if (pending_bg_) {
-                do_bg             = true;
-                bg_img            = pending_bg_img_;
-                bg_gen            = pending_bg_gen_;
-                pending_bg_       = false;
-                pending_bg_img_.reset();
             }
         }
 
@@ -747,65 +732,73 @@ void ViewerWindow::worker_main() {
             // (bad_alloc / length_error on header-driven sizing). An exception
             // escaping worker_main() would unwind out of the std::thread and
             // std::terminate the process, so contain it and post a failure.
+            std::shared_ptr<const fitsx::FitsImage> img;  // kept for the analysis pass
             try {
                 auto loaded = fitsx::load_from_file(load_path.c_str());
                 if (!loaded.success) {
                     result->success = false;
                     result->error   = std::move(loaded.error);
                 } else {
-                    result->image = std::move(loaded.image);
                     // Compute auto-stretch once and stash it on the image so the
                     // UI thread's RAW <-> Auto toggle is instant.
                     const fitsx::StretchParams auto_p =
-                        fitsx::compute_auto_stretch(result->image);
-                    result->image.auto_stretch = auto_p;
+                        fitsx::compute_auto_stretch(loaded.image);
+                    loaded.image.auto_stretch = auto_p;
                     result->stretch  = (load_mode == StretchMode::Auto)
                                            ? auto_p : fitsx::StretchParams{};
-                    result->rendered = fitsx::render_to_bgra(result->image, result->stretch);
+                    result->rendered = fitsx::render_to_bgra(loaded.image, result->stretch);
+                    img = std::make_shared<const fitsx::FitsImage>(std::move(loaded.image));
+                    result->image   = img;
+                    result->success = true;
+                }
+            } catch (...) {
+                result->success = false;
+                result->error   = "Failed to load file (malformed or out of memory)";
+                img.reset();
+            }
 
-                    // On a cache miss we run the full analysis once and KEEP the
-                    // per-star detail, so turning on an overlay reuses it instead
-                    // of triggering a second full-image detection pass. On a hit
-                    // the detail isn't cached, so overlays still compute it lazily.
+            // Post the frame NOW -- it paints without waiting on star detection.
+            const bool loaded_ok = result->success;
+            ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
+                           static_cast<WPARAM>(load_gen),
+                           reinterpret_cast<LPARAM>(result.release()));
+
+            // Analysis half: run on the worker while the UI already shows the
+            // image, then post it separately. On a cache miss we keep the full
+            // per-star detail so the first overlay reuses it; on a hit the detail
+            // isn't cached and overlays compute it lazily.
+            // Skip it entirely if a newer load is already queued (user spammed
+            // Next): the frame we just posted is about to be superseded, so
+            // analysing it would be wasted work.
+            bool superseded = false;
+            { std::lock_guard<std::mutex> lk(worker_mtx_); superseded = pending_load_; }
+            if (loaded_ok && img && !superseded) {
+                auto ana = std::make_unique<LoadAnalysis>();
+                try {
                     auto compute_fresh = [&] {
-                        auto full = fitsx::run_full_analysis(result->image);
-                        result->analysis   = full.summary;
-                        result->detail     = std::move(full.detail);
-                        result->has_detail = true;
+                        auto full = fitsx::run_full_analysis(*img);
+                        ana->analysis   = full.summary;
+                        ana->detail     = std::move(full.detail);
+                        ana->has_detail = true;
                     };
                     const std::string ckey =
                         fitsx::compute_cache_key_from_file(load_path.c_str());
                     if (!ckey.empty()) {
                         if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey);
                             cached.has_value()) {
-                            result->analysis = *cached;
+                            ana->analysis = *cached;
                         } else {
                             compute_fresh();
-                            fitsx::AnalysisCache::instance().store(ckey, result->analysis);
+                            fitsx::AnalysisCache::instance().store(ckey, ana->analysis);
                         }
                     } else {
                         compute_fresh();
                     }
-                    result->success = true;
-                }
-            } catch (...) {
-                result->success = false;
-                result->error   = "Failed to load file (malformed or out of memory)";
+                } catch (...) { /* drop analysis; the image is already shown */ }
+                ::PostMessageW(hwnd_, WM_APP_ANALYSIS_DONE,
+                               static_cast<WPARAM>(load_gen),
+                               reinterpret_cast<LPARAM>(ana.release()));
             }
-
-            ::PostMessageW(hwnd_, WM_APP_LOAD_DONE,
-                           static_cast<WPARAM>(load_gen),
-                           reinterpret_cast<LPARAM>(result.release()));
-        } else if (do_detail) {
-            if (!detail_img || detail_img->data.empty()) continue;
-            try {
-                auto out = std::make_unique<DetailResult>();
-                out->gen    = detail_gen;
-                out->detail = fitsx::run_detailed_analysis(*detail_img);
-                ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
-                               static_cast<WPARAM>(detail_gen),
-                               reinterpret_cast<LPARAM>(out.release()));
-            } catch (...) { /* drop the overlay analysis rather than crash */ }
         } else if (do_render) {
             if (!render_img || render_img->data.empty()) continue;
             try {
@@ -815,17 +808,64 @@ void ViewerWindow::worker_main() {
                 ::PostMessageW(hwnd_, WM_APP_RENDER_DONE, 0,
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop this render tick rather than crash */ }
-        } else if (do_bg) {
-            if (!bg_img || bg_img->data.empty()) continue;
+        }
+    }
+}
+
+void ViewerWindow::inspect_worker_main() {
+    // Second worker: the inspection-panel computes (per-star detail, PSF plate,
+    // background map). Kept off the primary worker so they never queue behind --
+    // or delay -- an interactive load/render, and vice-versa. Shares worker_mtx_
+    // and worker_quit_ with the primary worker; wakes on its own inspect_cv_.
+    for (;;) {
+        bool do_detail = false, do_psf = false, do_bg = false;
+        std::shared_ptr<const fitsx::FitsImage>      detail_img;
+        std::uint64_t                                detail_gen = 0;
+        std::shared_ptr<const fitsx::FitsImage>      psf_img;
+        std::uint64_t                                psf_gen = 0;
+        int                                          psf_grid = 3;
+        std::shared_ptr<const fitsx::FitsImage>      bg_img;
+        std::uint64_t                                bg_gen = 0;
+
+        {
+            std::unique_lock<std::mutex> lk(worker_mtx_);
+            inspect_cv_.wait(lk, [this] {
+                return worker_quit_ || pending_detail_ || pending_psf_ || pending_bg_;
+            });
+            if (worker_quit_) return;
+            // Priority: detail (main-view overlay) > psf (inspector) > bg (panel).
+            if (pending_detail_) {
+                do_detail       = true;
+                detail_img      = pending_detail_img_;
+                detail_gen      = pending_detail_gen_;
+                pending_detail_ = false;
+                pending_detail_img_.reset();
+            } else if (pending_psf_) {
+                do_psf          = true;
+                psf_img         = pending_psf_img_;
+                psf_gen         = pending_psf_gen_;
+                psf_grid        = pending_psf_grid_;
+                pending_psf_    = false;
+                pending_psf_img_.reset();
+            } else if (pending_bg_) {
+                do_bg           = true;
+                bg_img          = pending_bg_img_;
+                bg_gen          = pending_bg_gen_;
+                pending_bg_     = false;
+                pending_bg_img_.reset();
+            }
+        }
+
+        if (do_detail) {
+            if (!detail_img || detail_img->data.empty()) continue;
             try {
-                auto out = std::make_unique<BgResult>();
-                out->gen = bg_gen;
-                out->img = bg_img.get();
-                out->map = fitsx::compute_background(*bg_img);
-                ::PostMessageW(hwnd_, WM_APP_BG_DONE,
-                               static_cast<WPARAM>(bg_gen),
+                auto out = std::make_unique<DetailResult>();
+                out->gen    = detail_gen;
+                out->detail = fitsx::run_detailed_analysis(*detail_img);
+                ::PostMessageW(hwnd_, WM_APP_DETAIL_DONE,
+                               static_cast<WPARAM>(detail_gen),
                                reinterpret_cast<LPARAM>(out.release()));
-            } catch (...) { /* drop the background map rather than crash */ }
+            } catch (...) { /* drop the overlay analysis rather than crash */ }
         } else if (do_psf) {
             if (!psf_img || psf_img->data.empty()) continue;
             try {
@@ -837,6 +877,17 @@ void ViewerWindow::worker_main() {
                                static_cast<WPARAM>(psf_gen),
                                reinterpret_cast<LPARAM>(out.release()));
             } catch (...) { /* drop the PSF plate rather than crash */ }
+        } else if (do_bg) {
+            if (!bg_img || bg_img->data.empty()) continue;
+            try {
+                auto out = std::make_unique<BgResult>();
+                out->gen = bg_gen;
+                out->img = bg_img.get();
+                out->map = fitsx::compute_background(*bg_img);
+                ::PostMessageW(hwnd_, WM_APP_BG_DONE,
+                               static_cast<WPARAM>(bg_gen),
+                               reinterpret_cast<LPARAM>(out.release()));
+            } catch (...) { /* drop the background map rather than crash */ }
         }
     }
 }
@@ -892,7 +943,7 @@ void ViewerWindow::request_detail() {
         pending_detail_gen_ = gen;
     }
     detail_pending_ = true;
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 void ViewerWindow::request_background() {
@@ -905,7 +956,7 @@ void ViewerWindow::request_background() {
         pending_bg_img_ = image_;
         pending_bg_gen_ = gen;
     }
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 void ViewerWindow::request_psf(int grid) {
@@ -919,7 +970,7 @@ void ViewerWindow::request_psf(int grid) {
         pending_psf_gen_  = gen;
         pending_psf_grid_ = grid;
     }
-    worker_cv_.notify_one();
+    inspect_cv_.notify_one();
 }
 
 // Kick a detailed analysis if an overlay needs one and we don't have it yet.
@@ -1046,7 +1097,7 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
         return;
     }
 
-    image_       = std::make_shared<const fitsx::FitsImage>(std::move(r->image));
+    image_       = r->image;       // already a shared_ptr<const FitsImage>
     stretch_     = r->stretch;
     rendered_    = std::move(r->rendered);
     loaded_path_ = std::move(r->path);
@@ -1054,23 +1105,16 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     safe_release(bitmap_);
 
     headers_.update(image_->headers);
-    analysis_.update(r->analysis);
+    analysis_.clear();                     // filled by on_load_analysis_finished
     histogram_.set_image(image_);          // shared_ptr; histogram defers bin
     histogram_.set_params(stretch_);        // computation until popup is shown
 
-    // New image: the previous per-star analysis is stale. Bump the detail
-    // generation so any in-flight worker result is dropped. If the load computed
-    // the detail fresh (cache miss), adopt it directly -- overlays then reuse it
-    // with no second detection pass. On a cache hit the detail wasn't computed,
-    // so fall back to the lazy worker path.
+    // The per-star analysis lands separately (on_load_analysis_finished) so the
+    // frame paints first. Until then there's no detail: bump the generation to
+    // drop any in-flight worker result for the previous image, and reset.
     detail_gen_latest_.fetch_add(1, std::memory_order_relaxed);
-    if (r->has_detail) {
-        detailed_ = std::make_shared<const fitsx::DetailedAnalysis>(std::move(r->detail));
-    } else {
-        detailed_.reset();
-    }
+    detailed_.reset();
     detail_pending_ = false;
-    if (needs_detailed()) ensure_detailed();   // no-op if detailed_ already set
     tilt_window_.clear();          // old tilt is stale until the new analysis lands
     tilt_computed_for_ = nullptr;  // force a recompute for the new image
     // Refresh the aberration crops from the freshly rendered frame if open.
@@ -1082,6 +1126,24 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     update_title();
     invalidate_viewport();
     toolbar_.set_nav_enabled(true);
+}
+
+void ViewerWindow::on_load_analysis_finished(std::uint64_t gen, LoadAnalysis* raw) {
+    std::unique_ptr<LoadAnalysis> r(raw);
+    // Drop stale analysis (user navigated to another file since this load).
+    if (gen != load_gen_latest_.load(std::memory_order_relaxed)) return;
+    if (!hwnd_ || !::IsWindow(hwnd_)) return;
+
+    analysis_.update(r->analysis);
+    // Cache miss carried the fresh per-star detail -- adopt it so the first
+    // overlay reuses it. Cache hit: no detail, fall back to the lazy worker.
+    if (r->has_detail) {
+        detailed_ = std::make_shared<const fitsx::DetailedAnalysis>(std::move(r->detail));
+        if (any_overlay_active()) invalidate_viewport();
+        refresh_tilt_window();
+    } else if (needs_detailed()) {
+        ensure_detailed();
+    }
 }
 
 void ViewerWindow::navigate_sibling(int step) {

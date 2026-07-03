@@ -45,6 +45,10 @@ private:
     void load_file(const wchar_t* path);
     struct LoadResult;
     void on_load_finished(std::uint64_t gen, LoadResult* r);
+    // Second half of a load: the analysis (summary + per-star detail) posted
+    // after the image, so the frame paints without waiting on star detection.
+    struct LoadAnalysis;
+    void on_load_analysis_finished(std::uint64_t gen, LoadAnalysis* r);
 
     // Walk siblings in the current file's directory (FITS / XISF / camera RAW,
     // natural-sort order) and load the next/previous one. step = +1 or -1.
@@ -171,7 +175,8 @@ private:
     //
     // Load takes priority over render: a fresh navigation against a new
     // file always supersedes a pending re-stretch of the previous one.
-    void worker_main();
+    void worker_main();          // primary: load + render
+    void inspect_worker_main();  // secondary: detail + psf + background
     void request_load (const std::wstring& path);
     void request_render(const fitsx::StretchParams& p);
     void request_detail();
@@ -198,8 +203,14 @@ private:
 
     std::thread             worker_thread_;
     std::mutex              worker_mtx_;
-    std::condition_variable worker_cv_;
+    std::condition_variable worker_cv_;         // wakes the primary (load/render) worker
     bool                    worker_quit_ = false;
+
+    // Second worker: inspection-panel computes (detail / PSF / background) so
+    // they never serialize behind -- or delay -- an interactive load/render.
+    // Shares worker_mtx_ + worker_quit_ with the primary worker.
+    std::thread             inspect_thread_;
+    std::condition_variable inspect_cv_;
 
     // load slot
     bool                                       pending_load_       = false;
