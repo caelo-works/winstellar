@@ -177,6 +177,10 @@ private:
     // file always supersedes a pending re-stretch of the previous one.
     void worker_main();          // primary: load + render
     void inspect_worker_main();  // secondary: detail + psf + background
+    // Free any worker result still sitting in the message queue (posted but
+    // never dispatched, e.g. app closed mid-compute). Call only after both
+    // workers are joined. Defined where all the result structs are complete.
+    void drain_worker_messages();
     void request_load (const std::wstring& path);
     void request_render(const fitsx::StretchParams& p);
     void request_detail();
