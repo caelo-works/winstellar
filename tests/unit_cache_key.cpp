@@ -9,17 +9,17 @@ using fitsx::compute_cache_key;
 
 namespace {
 
-// compute_cache_key reads up to min(size, 8 KB) bytes from the buffer. Tests
-// must pass a buffer at least that large; otherwise we read past the end and
-// the result depends on unrelated stack/heap contents.
-constexpr size_t kHashedBytes = 8 * 1024;
+// compute_cache_key reads up to min(size, kCacheKeySampleBytes = 64 KB) bytes
+// from the buffer. Tests must pass a buffer at least that large; otherwise we
+// read past the end and the result depends on unrelated stack/heap contents.
+constexpr size_t kHashedBytes = 64 * 1024;
 
 }  // namespace
 
-TEST(CacheKey, IsSixteenLowercaseHex) {
+TEST(CacheKey, IsThirtyTwoLowercaseHex) {
     std::vector<uint8_t> buf(kHashedBytes, 0xAB);
     const std::string k = compute_cache_key(buf.data(), buf.size());
-    EXPECT_EQ(k.size(), 16u);
+    EXPECT_EQ(k.size(), 32u);   // 128-bit key (two FNV-1a lanes)
     for (char c : k) {
         EXPECT_TRUE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
             << "non-hex char " << c << " in key " << k;
