@@ -112,6 +112,10 @@ private:
     // markers are an on-image overlay; tilt is its own popup window.
     bool show_stars_ = false;
     std::shared_ptr<const fitsx::DetailedAnalysis> detailed_;
+    // Which detailed_ the tilt result was last computed for. compute_tilt is
+    // rotation-independent (TiltView permutes at paint), so refresh_tilt_window
+    // recomputes only when this changes -- not on every rotation keypress.
+    const fitsx::DetailedAnalysis* tilt_computed_for_ = nullptr;
     bool detail_pending_ = false;     // a detailed analysis is in flight
     const fitsx::FitsImage* bg_for_ = nullptr;   // image the background map was built for
 
