@@ -135,41 +135,56 @@ IFACEMETHODIMP FitsPropertyHandler::Initialize(IStream* stream, DWORD /*grfMode*
     clear_props();
     populated_ = false;
     buf_.clear();
-    // Read only the useful part per format. Peek the magic first, then size the
-    // read: a camera RAW's EXIF is in the first few MB, so reading the 32 MB
-    // header cap for every NEF froze Explorer when scrolling a folder of them.
-    // XISF XML headers (up to ~17 MB) and FITS primary HDUs keep the full cap.
-    HRESULT hr = buf_.init(stream, 64 * 1024);   // magic only
+
+    // Peek the magic + enough for the content key (compute_cache_key hashes the
+    // first 64 KB + total size). This is all we need to consult the metadata
+    // cache before deciding whether to read the rest.
+    HRESULT hr = buf_.init(stream, 64 * 1024);
     if (FAILED(hr)) return hr;
-    size_t cap = StreamBuffer::kHeaderCap;
-    if (fitsx::detect_format(buf_.data(), buf_.size()) == fitsx::ImageFormat::Raw)
-        cap = StreamBuffer::kRawHeaderCap;
-    hr = buf_.init(stream, cap);
-    if (FAILED(hr)) return hr;
-    populate();
+    const std::string key = fitsx::compute_cache_key(buf_.data(), buf_.total_size());
+
+    // Defensive: this runs in-process inside explorer.exe / prevhost.exe.
+    try {
+        fitsx::FitsImage img;
+        if (auto md = fitsx::AnalysisCache::instance().lookup_metadata(key); md.has_value()) {
+            // Metadata cache HIT: serve the columns without re-reading megabytes
+            // and re-parsing the file (the win on a folder revisit / column add).
+            img.width  = md->width;
+            img.height = md->height;
+            img.headers = std::move(md->headers);
+            emit_columns(img, /*can_run_analysis=*/false, key);
+        } else {
+            // MISS: read only the useful part per format (a camera RAW's EXIF is
+            // in the first couple MB; XISF/FITS keep the full header cap), parse,
+            // emit, and cache the metadata for next time.
+            size_t cap = StreamBuffer::kHeaderCap;
+            if (fitsx::detect_format(buf_.data(), buf_.size()) == fitsx::ImageFormat::Raw)
+                cap = StreamBuffer::kRawHeaderCap;
+            if (SUCCEEDED(buf_.init(stream, cap))) {
+                bool can_run_analysis = false;
+                if (parse_image(img, can_run_analysis)) {
+                    fitsx::AnalysisCache::instance().store_metadata(
+                        key, {img.width, img.height, img.headers});
+                    emit_columns(img, can_run_analysis, key);
+                }
+            }
+        }
+    } catch (...) {
+        // Swallow everything; partially-populated props_ is fine.
+    }
     populated_ = true;
     return S_OK;
 }
 
-void FitsPropertyHandler::populate() {
-    // Defensive: this runs in-process inside explorer.exe and SearchIndexer.exe.
-    // Catch every conceivable failure path to keep Explorer alive.
-    try {
-        // Format-specific path. For FITS we need to round-trip through CFITSIO
-        // to get the headers + pixel data. For XISF the XML header carries
-        // everything we need for column emission and we DELIBERATELY skip
-        // pixel decoding (the buffer is intentionally truncated to 32 MB
-        // header-only mode by Initialize()).
-        fitsx::FitsImage img;
-        // Set true only when we hold enough pixel data to compute HFR/stars in
-        // place. XISF/RAW stay header-only (lookup-only); FITS computes when the
-        // whole file fits in the 32 MB buffer (see the Fits case below).
-        bool can_run_analysis = false;
-
-        switch (fitsx::detect_format(buf_.data(), buf_.size())) {
+bool FitsPropertyHandler::parse_image(fitsx::FitsImage& img, bool& can_run_analysis) {
+    // buf_ holds the format-appropriate header read by Initialize. XISF/RAW stay
+    // header-only; FITS decodes pixels too when the whole file fits in the buffer
+    // so the "sort by HFR in Explorer" path works on the common (<= 32 MB) case.
+    can_run_analysis = false;
+    switch (fitsx::detect_format(buf_.data(), buf_.size())) {
         case fitsx::ImageFormat::Xisf: {
             auto h = fitsx::parse_xisf_header(buf_.data(), buf_.size());
-            if (!h.success) return;
+            if (!h.success) return false;
             img.width = h.header.width;
             img.height = h.header.height;
             img.headers = std::move(h.header.fits_keywords);
@@ -184,7 +199,7 @@ void FitsPropertyHandler::populate() {
             // RAW; if a pathological file hid them further in, columns are simply
             // dropped for that file rather than paying a 32 MB read on every NEF.
             auto m = fitsx::parse_raw_metadata(buf_.data(), buf_.size());
-            if (!m.success) return;
+            if (!m.success) return false;
             img.width = m.width;
             img.height = m.height;
             img.headers = std::move(m.headers);
@@ -196,7 +211,7 @@ void FitsPropertyHandler::populate() {
             // (a 26 Mpx 16-bit sub is ~52 MB, the common modern-CMOS case).
             // Reading pixels used to fail on those and drop ALL columns.
             auto md = fitsx::parse_fits_metadata(buf_.data(), buf_.size());
-            if (!md.success) return;
+            if (!md.success) return false;
             img.width   = md.width;
             img.height  = md.height;
             img.headers = std::move(md.headers);
@@ -217,8 +232,14 @@ void FitsPropertyHandler::populate() {
             }
             break;
         }
+        default:
+            return false;
         }
+        return true;
+}
 
+void FitsPropertyHandler::emit_columns(const fitsx::FitsImage& img, bool can_run_analysis,
+                                       const std::string& key) {
         // System.Image.HorizontalSize / VerticalSize  (UI4)
         if (img.width > 0)  add_uint(props_, PKEY_Image_HorizontalSize, static_cast<ULONG>(img.width));
         if (img.height > 0) add_uint(props_, PKEY_Image_VerticalSize,   static_cast<ULONG>(img.height));
@@ -314,24 +335,20 @@ void FitsPropertyHandler::populate() {
         }
 
         // -- Computed analysis (cached by content hash) ---------------------
-        // FITS: compute on miss + store. XISF: lookup only (don't compute
-        // synchronously - the standalone viewer populates the cache when the
-        // user opens an XISF, after which Explorer columns light up).
-        // Use buf_.total_size() so the key is identical whether the buffer
-        // was fully or partially loaded (Property Handler has 32 MB cap;
-        // the viewer reads everything).
-        const std::string ckey = fitsx::compute_cache_key(buf_.data(), buf_.total_size());
+        // `key` is the same content key the metadata cache used. Cache HIT ->
+        // show it. Miss + we hold the full FITS pixels (<= 32 MB) -> compute +
+        // store. Otherwise leave empty; the viewer fills the cache on first open.
         fitsx::AnalysisResult ar;
         bool have = false;
-        if (auto cached = fitsx::AnalysisCache::instance().lookup(ckey); cached.has_value()) {
+        if (auto cached = fitsx::AnalysisCache::instance().lookup(key); cached.has_value()) {
             ar = *cached;
             have = true;
         } else if (can_run_analysis) {
             ar = fitsx::run_analysis(img);
-            fitsx::AnalysisCache::instance().store(ckey, ar);
+            fitsx::AnalysisCache::instance().store(key, ar);
             have = true;
         } else {
-            // XISF cache miss: leave columns empty until the viewer fills the cache.
+            // Cache miss, no pixels: leave columns empty until the viewer fills it.
             return;
         }
         if (have && ar.success) {
@@ -359,9 +376,6 @@ void FitsPropertyHandler::populate() {
                 add_double(props_, PKEY_AstroFits_AnalysisEccentricity, round_n(ar.eccentricity_median, 2));
             }
         }
-    } catch (...) {
-        // Swallow everything; partially-populated props_ is fine.
-    }
 }
 
 IFACEMETHODIMP FitsPropertyHandler::GetCount(DWORD* count) {
