@@ -45,6 +45,10 @@ private:
     void load_file(const wchar_t* path);
     struct LoadResult;
     void on_load_finished(std::uint64_t gen, LoadResult* r);
+    // Second half of a load: the analysis (summary + per-star detail) posted
+    // after the image, so the frame paints without waiting on star detection.
+    struct LoadAnalysis;
+    void on_load_analysis_finished(std::uint64_t gen, LoadAnalysis* r);
 
     // Walk siblings in the current file's directory (FITS / XISF / camera RAW,
     // natural-sort order) and load the next/previous one. step = +1 or -1.
