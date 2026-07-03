@@ -1,7 +1,13 @@
 <#
 .SYNOPSIS
-    Stages WinStellarShellExt + dependencies into %LOCALAPPDATA%\WinStellar and
+    Stages WinStellarShellExt + dependencies into %ProgramFiles%\WinStellar and
     registers the shell extension with Explorer.
+
+    NOTE: a system-wide (HKLM) COM registration must point at a directory that
+    ordinary users cannot write to, otherwise anyone could swap the DLL and have
+    Explorer load their code. %ProgramFiles% is admin-only (and matches where the
+    real installer puts it); %LOCALAPPDATA% -- which this used to use -- is
+    user-writable and was a local privilege-escalation vector.
 
 .PARAMETER Config
     Build configuration whose binaries to register. Default: Release.
@@ -83,7 +89,10 @@ if (-not (Test-Path $dllSrc)) {
     throw "DLL not found: $dllSrc. Run scripts\build.cmd -Config $Config first."
 }
 
-$installDir = Join-Path $env:LOCALAPPDATA 'WinStellar'
+# Protected, admin-only location (see .SYNOPSIS): a user-writable install dir
+# under a system-wide COM registration is a DLL-hijack / privilege-escalation
+# vector. Requires the elevation this script already demands.
+$installDir = Join-Path $env:ProgramFiles 'WinStellar'
 $dllDst = Join-Path $installDir 'WinStellarShellExt.dll'
 Log "Install dir: $installDir"
 
