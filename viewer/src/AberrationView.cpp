@@ -3,8 +3,8 @@
 #include "fits_core/pixmath.h"
 
 #include "InspectRotation.h"
+#include "D2DPopup.h"
 
-#include <dwmapi.h>
 #include <dwrite.h>
 #include <commctrl.h>
 
@@ -39,9 +39,6 @@ constexpr int kIdVisual  = 103;
 constexpr int kIdInspect = 104;
 
 constexpr int kBaseTile = 178;   // initial on-screen tile size (3x3)
-
-template <typename T>
-void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
 // luma_at(img, x, y) comes from fits_core/pixmath.h (found via ADL on FitsImage).
 
@@ -153,13 +150,7 @@ bool AberrationWindow::create(HWND owner, HINSTANCE hinst) {
 
     create_toolbar();
 
-    BOOL dark = TRUE;
-    ::DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
-    COLORREF capt = kBgColorRef;
-    ::DwmSetWindowAttribute(hwnd_, 35, &capt, sizeof(capt));
-    ::DwmSetWindowAttribute(hwnd_, 34, &capt, sizeof(capt));
-    COLORREF text = RGB(0xE8, 0xEA, 0xED);
-    ::DwmSetWindowAttribute(hwnd_, 36, &text, sizeof(text));
+    apply_dark_titlebar(hwnd_, kBgColorRef);
 
     resize_to_grid();
     init_d2d();
@@ -428,12 +419,7 @@ void AberrationWindow::init_d2d() {
         dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &text_);
     if (!d2d_factory_ || !hwnd_) return;
-    RECT rc; ::GetClientRect(hwnd_, &rc);
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(), 96.0f, 96.0f);
-    D2D1_HWND_RENDER_TARGET_PROPERTIES hprops = D2D1::HwndRenderTargetProperties(
-        hwnd_, D2D1::SizeU(std::max<LONG>(1, rc.right), std::max<LONG>(1, rc.bottom)));
-    d2d_factory_->CreateHwndRenderTarget(props, hprops, &rt_);
+    rt_ = create_hwnd_rt(d2d_factory_, hwnd_);
     if (!rt_) return;
     rt_->CreateSolidColorBrush(kPanelBg, &br_panel_);
     rt_->CreateSolidColorBrush(kFrame,   &br_frame_);

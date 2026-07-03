@@ -2,8 +2,8 @@
 
 #include "InspectColor.h"
 #include "InspectRotation.h"
+#include "D2DPopup.h"
 
-#include <dwmapi.h>
 #include <dwrite.h>
 
 #include <algorithm>
@@ -16,8 +16,6 @@ constexpr COLORREF kBgColorRef = RGB(0x0b, 0x0d, 0x10);
 const D2D1::ColorF kPanelBg(0x05070a);
 const D2D1::ColorF kSquare (0x556070);
 const D2D1::ColorF kText   (0xE0E2E5);
-
-template <typename T> void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
 // Displayed 3x3 grid cell (dr,dc) -> source cell index under cw rotation.
 // src_cell -> disp_to_src_index(.,.,3,rot) in InspectRotation.h.
@@ -56,13 +54,7 @@ bool TiltWindow::create(HWND owner, HINSTANCE hinst) {
         x, y, w, h, owner, nullptr, hinst, this);
     if (!hwnd_) return false;
 
-    BOOL dark = TRUE;
-    ::DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
-    COLORREF capt = kBgColorRef;
-    ::DwmSetWindowAttribute(hwnd_, 35, &capt, sizeof(capt));
-    ::DwmSetWindowAttribute(hwnd_, 34, &capt, sizeof(capt));
-    COLORREF text = RGB(0xE8, 0xEA, 0xED);
-    ::DwmSetWindowAttribute(hwnd_, 36, &text, sizeof(text));
+    apply_dark_titlebar(hwnd_, kBgColorRef);
 
     init_d2d();
     return true;
@@ -111,12 +103,7 @@ void TiltWindow::init_d2d() {
         dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 15.0f, L"en-us", &head_);
     if (!d2d_factory_ || !hwnd_) return;
-    RECT rc; ::GetClientRect(hwnd_, &rc);
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(), 96.0f, 96.0f);
-    D2D1_HWND_RENDER_TARGET_PROPERTIES hprops = D2D1::HwndRenderTargetProperties(
-        hwnd_, D2D1::SizeU(std::max<LONG>(1, rc.right), std::max<LONG>(1, rc.bottom)));
-    d2d_factory_->CreateHwndRenderTarget(props, hprops, &rt_);
+    rt_ = create_hwnd_rt(d2d_factory_, hwnd_);
     if (rt_) rt_->CreateSolidColorBrush(kText, &brush_);
 }
 
