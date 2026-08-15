@@ -4,7 +4,7 @@
 paraphrase it: the facts here are checked against the shipped code, a paraphrase
 is not.
 
-Applies to **0.6.10**. **The viewer's title bar does not show the version** — it
+Applies to **0.7.0**. **The viewer's title bar does not show the version** — it
 shows the file name and the zoom level. To find out what a user is running, ask
 them for one of these:
 
@@ -13,13 +13,14 @@ them for one of these:
   Details → File version** — this one also carries the git commit and the build
   date.
 
-**The interface is in English. On 0.6.10 a few labels in the inspection windows
-are still in French** — *« Carte du fond »*, *« Visuel »*, *« Inspecté »*,
-*« Courbure »*, *« Analyse PSF… »*. **They are English from the next release
-onward.** There is no language setting and never was: on 0.6.10 every user sees
-the same mixed interface, whatever their Windows language. So a user quoting a
-French label is not on a "French version" — they are on 0.6.10. Both wordings are
-given throughout this document; quote the one matching their version.
+**The interface is in English. On 0.6.10 and earlier a few labels in the
+inspection windows were in French** — *« Carte du fond »*, *« Visuel »*,
+*« Inspecté »*, *« Courbure »*, *« Analyse PSF… »*. **They are English from 0.7.0
+onward.** There is no language setting and never was: on those older versions
+every user saw the same mixed interface, whatever their Windows language. So a
+user quoting a French label is not on a "French version" — they are on 0.6.10 or
+earlier. Both wordings are given throughout this document; quote the one matching
+their version.
 
 **Never invent a figure, a path, a menu name, a supported format or a
 compatibility claim.** If the answer is not in this document, the correct answer
@@ -47,7 +48,7 @@ It is **two things in one install**, and users conflate them constantly:
 
 | | |
 |---|---|
-| Version | 0.6.10 |
+| Version | 0.7.0 |
 | Licence | GPL-3.0 — free and open source |
 | Requires | **Windows 10 or 11, 64-bit**. Nothing else — no .NET, no runtime, no separate download. |
 | Installs to | `C:\Program Files\WinStellar` |
@@ -288,7 +289,7 @@ The tooltips are the exact labels the user sees:
 - **Show / hide FITS headers (H)**
 
 **The stretch is a display setting only. WinStellar never modifies the user's
-file** — it has no save and no export in 0.6.10.
+file** — it has no save and no export in 0.7.0.
 
 ### Keyboard shortcuts, complete list
 
@@ -332,8 +333,9 @@ are drawn on the frame itself.
 
 A small **Tilt** window showing HFR across the field as a deformed square, with
 the header **`Tilt xx.x %      Curvature xx.x %`** (**`Courbure`**, French for
-*curvature*, on 0.6.10 — see the preamble). The legend reads **`HFR (px) · green =
-sharp  red = soft`**, and **`HFR (px) · vert = net  rouge = mou`** on 0.6.10.
+*curvature*, on 0.6.10 and earlier — see the preamble). The legend reads
+**`HFR (px) · green = sharp  red = soft`**, and
+**`HFR (px) · vert = net  rouge = mou`** on 0.6.10 and earlier.
 
 **If it says `No stars analysed`**, no star was detected in the frame. A tilt
 diagram cannot be built without stars: a dark, a flat, a heavily defocused frame
@@ -346,25 +348,26 @@ so coma, astigmatism and tilt show up as distorted star shapes away from the
 centre. Its toolbar has four buttons:
 
 - **3×3** / **5×5** — the sampling grid.
-- **Visual** (**Visuel** on 0.6.10) — the actual pixels at each grid position.
-- **Inspected** (**Inspecté** on 0.6.10) — the synthesised PSF model, annotated
-  with eccentricity, concentration and the dominant axis (**ref**, **radial**,
+- **Visual** (**Visuel** on 0.6.10 and earlier) — the actual pixels at each grid
+  position.
+- **Inspected** (**Inspecté** on 0.6.10 and earlier) — the synthesised PSF model,
+  annotated with eccentricity, concentration and the dominant axis (**ref**, **radial**,
   **tang.**, **oblique**).
 
-**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10) displayed in the window means
-it is **computing**, not that it failed. It runs on a background thread and the
+**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10 and earlier) displayed in the
+window means it is **computing**, not that it failed. It runs on a background thread and the
 window fills in when it is done.
 
 ### Background map…
 
-A **Background map** window (titled **Carte du fond** on 0.6.10) — an illumination
-/ sky-background map that reveals vignetting, gradients and amp glow. The readout
+A **Background map** window (titled **Carte du fond** on 0.6.10 and earlier) — an
+illumination / sky-background map that reveals vignetting, gradients and amp glow. The readout
 line gives the radial drop, the gradient and its direction, the azimuthal
 anisotropy and the corner glow.
 
 **If it says `Image too small for the background map.`** (**`Image trop petite
-pour la carte de fond.`** on 0.6.10), the frame is **smaller than 800 pixels on its short
-side**. The map is computed on a 48 × 72 cell grid and a small image has too few
+pour la carte de fond.`** on 0.6.10 and earlier), the frame is **smaller than 800
+pixels on its short side**. The map is computed on a 48 × 72 cell grid and a small image has too few
 pixels per cell to be meaningful. This is a hard limit, not a bug, and there is
 no setting to lower it.
 
@@ -381,20 +384,20 @@ even if the format itself is a camera RAW.
 - **XISF** — `.xisf` (PixInsight).
 - **Camera RAW** — `.nef` and `.nrw` (Nikon), `.cr2` (Canon), `.arw` and `.sr2`
   (Sony), `.dng` (Adobe), `.pef` (Pentax), `.srw` (Samsung), `.iiq` (Phase One).
-- **From the release after 0.6.10, also** — `.cr3` (recent Canon), `.raf`
-  (Fujifilm), `.orf` (Olympus / OM System), `.rw2` (Panasonic). These four need
-  the **new installer to have been run**, since that is what registers the
-  Explorer extensions for them — updating by any other means will not do it.
+- **From 0.7.0, also** — `.cr3` (recent Canon), `.raf` (Fujifilm), `.orf`
+  (Olympus / OM System), `.rw2` (Panasonic). These four need the **0.7.0
+  installer to have been run**, since that is what registers the Explorer
+  extensions for them — updating by any other means will not do it.
 
-**`.cr3`, `.raf`, `.orf` and `.rw2` do not work on 0.6.10** — this catches people
-out. If a user with a Canon R-series camera says "my RAW files don't show up",
-**it is almost certainly a `.cr3`**. Ask which version they run:
+**`.cr3`, `.raf`, `.orf` and `.rw2` do not work on 0.6.10 or earlier** — this
+catches people out. If a user with a Canon R-series camera says "my RAW files
+don't show up", **it is almost certainly a `.cr3`**. Ask which version they run:
 
-- **On 0.6.10** — confirm the limitation. Their workaround today is to convert to
-  **DNG** (Adobe DNG Converter), which 0.6.10 reads. Updating once the next
-  release is out is the real fix.
-- **On a later version** — these formats are expected to work. If one does not
-  open, that is a genuine bug: escalate with the file.
+- **On 0.6.10 or earlier** — confirm the limitation. **Updating to 0.7.0 is the
+  fix.** If they cannot update, converting to **DNG** (Adobe DNG Converter) works,
+  since every version reads DNG.
+- **On 0.7.0 or later** — these formats work. If one does not open, check the
+  0.7.0 installer was actually run; if it was, escalate with the file.
 
 **Geometry limits:** an image is rejected above **100 000 pixels on either axis**
 or **1 gigapixel in total**. No real astronomy frame comes close; a file that
@@ -437,8 +440,8 @@ The user will paste the message. This is what each one means.
 **WinStellar**.
 The file could not be read. Genuine causes: the file is truncated or corrupt
 (interrupted download, bad transfer, dying drive), or it is a format WinStellar
-does not support (see the formats section — on 0.6.10, **`.cr3` is the usual
-culprit**). Ask for the exact reason shown after the colon.
+does not support (see the formats section — on 0.6.10 and earlier, **`.cr3` is
+the usual culprit**). Ask for the exact reason shown after the colon.
 
 **`Status   analysis failed`** in the measurements panel.
 The image loaded and is displayed, but star detection and statistics could not
@@ -452,10 +455,11 @@ frame or a badly defocused one.
 Same cause: the tilt diagram needs detected stars. Not a bug.
 
 **`Image too small for the background map.`** in the background map window —
-**`Image trop petite pour la carte de fond.`** on 0.6.10.
+**`Image trop petite pour la carte de fond.`** on 0.6.10 and earlier.
 The image is smaller than **800 pixels on its short side**. Hard limit.
 
-**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10) in the Aberration Inspector.
+**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10 and earlier) in the Aberration
+Inspector.
 **Not an error** — it means the PSF plate is being computed. Wait for it.
 
 ### In the Explorer preview pane
@@ -497,33 +501,33 @@ This is a deliberate trade-off — decoding every large frame while the user
 scrolls would freeze the folder. Explain it, don't apologise for it, and don't
 suggest a reinstall.
 
-### CR3, RAF, ORF and RW2 camera RAW files are not supported on 0.6.10
+### CR3, RAF, ORF and RW2 camera RAW files are not supported on 0.6.10 or earlier
 
 **Symptom:** "My Canon R6 / Fuji / Olympus / Panasonic RAW files show no
 thumbnail and won't open."
 
-**Cause:** 0.6.10 required the canonical TIFF marker, which those four formats do
-not carry, so **`.cr3`, `.raf`, `.orf` and `.rw2` are not recognised at all** on
-that version. **Fixed in the release after 0.6.10**, where all four are read.
+**Cause:** those versions required the canonical TIFF marker, which those four
+formats do not carry, so **`.cr3`, `.raf`, `.orf` and `.rw2` were not recognised
+at all**. **Fixed in 0.7.0**, which reads all four.
 
-**Answer on 0.6.10:** convert to **DNG** with the free Adobe DNG Converter, which
-0.6.10 reads, or wait for the next release.
+**Answer:** **update to 0.7.0.** If they cannot, converting to **DNG** with the
+free Adobe DNG Converter works on every version.
 
-**On any later version these formats are expected to work.** If one still does
-not show up there, the usual reason is that **the new installer was never run** —
-registering the Explorer extensions for the new extensions is what the installer
-does. Have them run it, then sign out and back in. If it still fails after that,
-escalate with the file: that is a new bug, not this one.
+**On 0.7.0 these formats work.** If one still does not show up there, the usual
+reason is that **the 0.7.0 installer was never run** — registering the Explorer
+extensions for the new extensions is what the installer does. Have them run it,
+then sign out and back in. If it still fails after that, escalate with the file:
+that is a new bug, not this one.
 
-### Parts of the inspection windows are in French (0.6.10 only)
+### Parts of the inspection windows are in French (0.6.10 and earlier only)
 
-On **0.6.10** the Tilt, Aberration and Background windows show a handful of French
-labels — *« Courbure »*, *« Visuel »*, *« Inspecté »*, *« Analyse PSF… »*,
-*« Carte du fond »*, *« Image trop petite pour la carte de fond. »*. **Every user
-on that version sees them, in every language**; there is no language setting and
-no "English version" to switch to, so it is not something they can fix. **The
-labels are English from the next release onward.** On 0.6.10: confirm it, say it
-is cosmetic and already fixed for the next release, translate the label, move on.
+On **0.6.10 and earlier** the Tilt, Aberration and Background windows show a
+handful of French labels — *« Courbure »*, *« Visuel »*, *« Inspecté »*,
+*« Analyse PSF… »*, *« Carte du fond »*, *« Image trop petite pour la carte de
+fond. »*. **Every user on those versions sees them, in every language**; there is
+no language setting and no "English version" to switch to, so it is not something
+they can fix. **The labels are English from 0.7.0 onward.** On an older version:
+confirm it, say it is cosmetic and fixed in 0.7.0, translate the label, move on.
 
 ### Windows warns that the publisher is unknown
 
@@ -541,8 +545,8 @@ is a known missing feature, not a broken one.
 ### The background map needs an image at least 800 px on its short side
 
 Anything smaller shows **`Image too small for the background map.`** (*« Image trop
-petite pour la carte de fond. »* on 0.6.10). There is no setting to lower the
-threshold.
+petite pour la carte de fond. »* on 0.6.10 and earlier). There is no setting to
+lower the threshold.
 
 ### Tilt and aberration need detected stars
 
@@ -581,9 +585,9 @@ the folder is actually in a thumbnail view (Large icons or bigger), not Details.
 
 **"My RAW files don't open / have no thumbnail."**
 Check the extension first. `.nef`, `.nrw`, `.cr2`, `.arw`, `.sr2`, `.dng`, `.pef`,
-`.srw`, `.iiq` work on every version. **`.cr3`, `.raf`, `.orf`, `.rw2` do not work
-on 0.6.10** — convert to DNG or update once the next release is out. On a later
-version they should work; if they don't, escalate with the file.
+`.srw`, `.iiq` work on every version. **`.cr3`, `.raf`, `.orf`, `.rw2` need
+0.7.0** — on 0.6.10 or earlier, update, or convert to DNG. On 0.7.0 they work,
+provided its installer was actually run; if they still don't, escalate.
 
 **"Double-clicking my NEF opens my photo app, not WinStellar."**
 Deliberate. WinStellar claims `.fit`, `.fits` and `.xisf` as default, and leaves
@@ -612,13 +616,13 @@ No stars were detected in that frame. Normal on darks, biases, flats, clouded or
 badly defocused frames. Both tools need stars.
 
 **"Half the inspection window is in French."**
-Known cosmetic issue on **0.6.10**; every user on it sees it, it is not their
-install. **Fixed from the next release onward.** *« Carte du fond »* = background
+Known cosmetic issue on **0.6.10 and earlier**; every user on those sees it, it is
+not their install. **Fixed in 0.7.0.** *« Carte du fond »* = background
 map, *« Courbure »* = curvature, *« Visuel »* = visual, *« Inspecté »* =
 inspected, *« Analyse PSF… »* = computing the PSF.
 
 **"Can I save / export the stretched image as JPG or PNG?"**
-**No — not in 0.6.10.** The viewer is read-only: it never modifies or writes an
+**No — not in 0.7.0.** The viewer is read-only: it never modifies or writes an
 image file. Export is a requested feature, not a hidden one. Do not send the user
 looking for a menu that does not exist.
 
