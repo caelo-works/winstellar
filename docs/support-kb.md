@@ -4,7 +4,7 @@
 paraphrase it: the facts here are checked against the shipped code, a paraphrase
 is not.
 
-Applies to **0.9.0**. **The viewer's title bar does not show the version** — it
+Applies to **1.0.0**. **The viewer's title bar does not show the version** — it
 shows the file name and the zoom level. To find out what a user is running, ask
 them for one of these:
 
@@ -49,7 +49,7 @@ It is **two things in one install**, and users conflate them constantly:
 
 | | |
 |---|---|
-| Version | 0.9.0 |
+| Version | 1.0.0 |
 | Licence | GPL-3.0 — free and open source |
 | Requires | **Windows 10 or 11, 64-bit**. Nothing else — no .NET, no runtime, no separate download. |
 | Installs to | `C:\Program Files\WinStellar` |
