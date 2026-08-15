@@ -9,6 +9,8 @@ add_executable(WinStellar WIN32
     src/TiltView.cpp
     src/BackgroundView.cpp
     src/ImageExport.cpp
+    src/UpdateInfo.cpp
+    src/UpdateCheck.cpp
     src/viewer.rc
 )
 
@@ -32,6 +34,10 @@ target_link_libraries(WinStellar PRIVATE
     dwmapi
     uxtheme
     windowscodecs
+    winhttp
+    bcrypt
+    wintrust
+    crypt32
     comctl32
     shlwapi
     ole32
