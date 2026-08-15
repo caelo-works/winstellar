@@ -4,7 +4,7 @@
 paraphrase it: the facts here are checked against the shipped code, a paraphrase
 is not.
 
-Applies to **0.7.0**. **The viewer's title bar does not show the version** — it
+Applies to **0.8.0**. **The viewer's title bar does not show the version** — it
 shows the file name and the zoom level. To find out what a user is running, ask
 them for one of these:
 
@@ -49,7 +49,7 @@ It is **two things in one install**, and users conflate them constantly:
 
 | | |
 |---|---|
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Licence | GPL-3.0 — free and open source |
 | Requires | **Windows 10 or 11, 64-bit**. Nothing else — no .NET, no runtime, no separate download. |
 | Installs to | `C:\Program Files\WinStellar` |
@@ -276,8 +276,7 @@ The tooltips are the exact labels the user sees:
 
 - **Open… (Ctrl+O)**
 - **Export image (Ctrl+S)** — the floppy-disk button, second from the left.
-  From the release after 0.7.0 only; opens the format menu (see the Export
-  section).
+  From **0.8.0** only; opens the format menu (see the Export section).
 - **Previous image (← / PgUp)** · **Next image (→ / PgDn)**
 - **Fit to window (F)** · **Actual size (1)** (the `1:1` button)
 - **Zoom out (-)** · **Zoom in (+)**
@@ -293,8 +292,8 @@ The tooltips are the exact labels the user sees:
 - **Show / hide FITS headers (H)**
 
 **The stretch is a display setting only: WinStellar never modifies the file it
-opened.** From the release after 0.7.0 it can WRITE a new file — see the Export
-section — but it always writes a new one and never touches the original.
+opened.** From **0.8.0** it can WRITE a new file — see the Export section — but
+it always writes a new one and never touches the original.
 
 ### Keyboard shortcuts, complete list
 
@@ -306,7 +305,7 @@ section — but it always writes a new one and never touches the original.
 - **A** — show / hide the measurements panel
 - **H** — show / hide the FITS headers panel
 - **Ctrl+H** — show / hide the histogram window
-- **Ctrl+S** — export the image (from the release after 0.7.0 only)
+- **Ctrl+S** — export the image (0.8.0 and later)
 
 Dragging with the left mouse button **pans** the image.
 
@@ -381,7 +380,7 @@ no setting to lower it.
 
 ## Exporting an image — JPG, PNG, TIFF, FITS
 
-**Not available in 0.7.0.** From the release after 0.7.0, the toolbar has an
+**Not available before 0.8.0.** From **0.8.0**, the toolbar has an
 **Export** button (**Ctrl+S**) that opens a menu of four formats. **The original
 file is never modified** — export always writes a new file, where the user chooses.
 
@@ -432,7 +431,7 @@ even if the format itself is a camera RAW.
 - **Camera RAW** — `.nef` and `.nrw` (Nikon), `.cr2` (Canon), `.arw` and `.sr2`
   (Sony), `.dng` (Adobe), `.pef` (Pentax), `.srw` (Samsung), `.iiq` (Phase One).
 - **From 0.7.0, also** — `.cr3` (recent Canon), `.raf` (Fujifilm), `.orf`
-  (Olympus / OM System), `.rw2` (Panasonic). These four need the **0.7.0
+  (Olympus / OM System), `.rw2` (Panasonic). These four need a **0.7.0-or-later
   installer to have been run**, since that is what registers the Explorer
   extensions for them — updating by any other means will not do it.
 
@@ -561,7 +560,7 @@ at all**. **Fixed in 0.7.0**, which reads all four.
 free Adobe DNG Converter works on every version.
 
 **On 0.7.0 these formats work.** If one still does not show up there, the usual
-reason is that **the 0.7.0 installer was never run** — registering the Explorer
+reason is that **a 0.7.0-or-later installer was never run** — registering the Explorer
 extensions for the new extensions is what the installer does. Have them run it,
 then sign out and back in. If it still fails after that, escalate with the file:
 that is a new bug, not this one.
@@ -669,8 +668,8 @@ map, *« Courbure »* = curvature, *« Visuel »* = visual, *« Inspecté »* =
 inspected, *« Analyse PSF… »* = computing the PSF.
 
 **"Can I save / export the image?"**
-**Not in 0.7.0** — that version has no export at all. **From the release after
-0.7.0**, the toolbar has an **Export** button (**Ctrl+S**) offering four formats,
+**Not before 0.8.0** — earlier versions have no export at all. **From 0.8.0**,
+the toolbar has an **Export** button (**Ctrl+S**) offering four formats,
 and which one they want depends on what they are doing:
 - **JPEG** and **PNG** — what is on screen, with the stretch applied. For sharing
   and posting.
