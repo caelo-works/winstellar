@@ -8,14 +8,16 @@
 
 namespace fitsx {
 
-// Camera RAW support (Nikon NEF, Canon CR2, Sony ARW, Adobe DNG, ...) backed
-// by LibRaw. Dispatch is by content -- the shell extensions hand us a stream
-// with no filename -- so we sniff the classic TIFF byte-order magic that every
-// TIFF-derived RAW shares.
+// Camera RAW support (Nikon NEF, Canon CR2/CR3, Sony ARW, Adobe DNG, Fujifilm
+// RAF, Olympus ORF, Panasonic RW2, ...) backed by LibRaw. Dispatch is by
+// content -- the shell extensions hand us a stream with no filename -- so we
+// sniff the same signatures LibRaw's own identify() uses.
 
-// True when the buffer begins with a little/big-endian TIFF marker
-// (II*\0 / MM\0*). Cheap gate so we only spin up LibRaw on plausible RAWs;
-// LibRaw itself is the final arbiter of whether the bytes actually decode.
+// True when the buffer opens with a byte-order mark (II / MM, covering every
+// TIFF-derived RAW whatever version word follows), Canon's ISO-media
+// "ftypcrx " brand, or Fujifilm's "FUJIFILM". Cheap gate so we only spin up
+// LibRaw on plausible RAWs; LibRaw itself is the final arbiter of whether the
+// bytes actually decode.
 [[nodiscard]] bool is_raw(const void* buffer, size_t size) noexcept;
 
 // Full decode: LibRaw unpack + demosaic to a linear 16-bit RGB image with

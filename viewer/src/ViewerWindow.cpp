@@ -222,13 +222,13 @@ void safe_release(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
 // Single source of truth for the file extensions the viewer recognizes,
 // grouped so the Open dialog can offer per-format filters. The RAW set mirrors
-// what raw_loader::is_raw accepts (the TIFF byte-order magic these formats
-// share). Both Prev/Next sibling enumeration and the Open dialog derive from
-// these, so the two can't drift.
+// what raw_loader::is_raw accepts. Both Prev/Next sibling enumeration and the
+// Open dialog derive from these, so the two can't drift.
 constexpr const wchar_t* const kFitsExts[] = { L".fit", L".fits" };
 constexpr const wchar_t* const kXisfExts[] = { L".xisf" };
 constexpr const wchar_t* const kRawExts[]  = {
-    L".nef", L".nrw", L".cr2", L".arw", L".sr2", L".dng", L".pef", L".srw", L".iiq",
+    L".nef", L".nrw", L".cr2", L".cr3", L".arw", L".sr2", L".dng", L".pef",
+    L".srw", L".iiq", L".raf", L".orf", L".rw2",
 };
 
 template <size_t N>

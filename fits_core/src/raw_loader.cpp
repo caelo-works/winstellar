@@ -7,6 +7,7 @@
 #include <memory>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <string>
@@ -77,11 +78,28 @@ void synth_headers(const LibRaw& rp, std::vector<FitsHeader>& out) {
 bool is_raw(const void* buffer, size_t size) noexcept {
     if (!buffer || size < 4) return false;
     const auto* b = static_cast<const uint8_t*>(buffer);
-    // Little-endian TIFF "II*\0" or big-endian "MM\0*". Every TIFF-derived RAW
-    // (NEF, CR2, ARW, DNG, PEF, SRW, ...) opens with one of these.
-    const bool le = (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00);
-    const bool be = (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A);
-    return le || be;
+
+    // Canon CR3 is not TIFF at all -- it is ISO base media (like MP4). LibRaw
+    // identifies it on the brand at offset 4, an exact 8-byte compare
+    // including the trailing space; the box size at 0..3 is never tested.
+    if (size >= 12 && std::memcmp(b + 4, "ftypcrx ", 8) == 0) return true;
+
+    // Fujifilm RAF opens with "FUJIFILMCCD-RAW " but LibRaw compares only the
+    // first 8 bytes, so match exactly what it matches.
+    if (size >= 8 && std::memcmp(b, "FUJIFILM", 8) == 0) return true;
+
+    // Everything else LibRaw decodes here is TIFF-derived: NEF, NRW, CR2, ARW,
+    // SR2, DNG, PEF, SRW, IIQ, ORF, RW2. Gate on the byte-order mark ALONE.
+    // LibRaw reads the version word at 2..3 and deliberately throws it away
+    // (tiff.cpp: `get2();` with no comparison), which is why requiring the
+    // canonical 42 used to reject files it decodes perfectly well:
+    //   * Olympus ORF stamps "IIRO" / "IIRS" / "MMOR",
+    //   * Panasonic RW2 uses its own version word,
+    //   * Phase One IIQ opens "IIII".
+    // Vendor identification happens far later, off the IFD0 Make tag, so no
+    // bounded header sniff can be more precise than this without reparsing
+    // the IFD. LibRaw stays the final arbiter of whether the bytes decode.
+    return (b[0] == 0x49 && b[1] == 0x49) || (b[0] == 0x4D && b[1] == 0x4D);
 }
 
 LoadResult load_raw_from_memory(const void* buffer, size_t size, bool half_res) {

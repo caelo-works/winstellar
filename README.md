@@ -44,7 +44,7 @@ suite** (tilt, aberration, background).
 
 - **FITS** — `.fit`, `.fits` (mono, OSC/Bayer, and 3-plane RGB cubes)
 - **XISF** — PixInsight `.xisf`
-- **Camera RAW** — NEF (Nikon), CR2/CR3 (Canon), ARW (Sony), DNG (Adobe), RAF (Fuji), ORF (Olympus), RW2 (Panasonic), PEF (Pentax), SRW (Samsung)
+- **Camera RAW** — NEF/NRW (Nikon), CR2/CR3 (Canon), ARW/SR2 (Sony), DNG (Adobe), RAF (Fuji), ORF (Olympus), RW2 (Panasonic), PEF (Pentax), SRW (Samsung), IIQ (Phase One)
 
 ## Installation
 

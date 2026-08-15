@@ -90,3 +90,33 @@ TEST(RawIntegration, MetadataOnlyParsesWithoutDemosaic) {
     for (const auto& h : m.headers) if (h.key == "INSTRUME") has_instr = true;
     EXPECT_TRUE(has_instr);
 }
+
+// The Explorer property handler never gets a file path, only a stream, and it
+// deliberately reads just the first StreamBuffer::kRawHeaderCap of a RAW rather
+// than pulling tens of megabytes per file while a folder is scrolled. That is a
+// bet: the metadata must live inside that window. NEF, CR3, ORF and RW2 parse
+// from as little as 256 KB, but Fujifilm RAF hides its metadata behind a large
+// embedded JPEG preview and needed 3 MB on an X-T4 -- which is why the cap is
+// 4 MB. Keep this in step with StreamBuffer::kRawHeaderCap: when it fails for a
+// format, that format's Explorer columns come up empty (the handler drops them
+// rather than paying a full read), which is a real user-visible symptom.
+TEST(RawIntegration, MetadataParsesFromTheHeaderWindowAlone) {
+    const auto p = raw_test_path();
+    if (p.empty() || !std::filesystem::exists(p))
+        GTEST_SKIP() << "Set WINSTELLAR_NEF to a camera RAW file to run this test";
+
+    constexpr size_t kRawHeaderCap = 4ull * 1024 * 1024;
+    auto bytes = read_file(p);
+    ASSERT_GT(bytes.size(), kRawHeaderCap) << "sample too small to exercise the cap";
+    bytes.resize(kRawHeaderCap);
+
+    auto m = fitsx::parse_raw_metadata(bytes.data(), bytes.size());
+    ASSERT_TRUE(m.success) << "metadata is not within the first "
+                           << (kRawHeaderCap / (1024 * 1024))
+                           << " MB: Explorer columns would be empty for this format";
+    EXPECT_GT(m.width, 0);
+    EXPECT_GT(m.height, 0);
+    bool has_instr = false;
+    for (const auto& h : m.headers) if (h.key == "INSTRUME") has_instr = true;
+    EXPECT_TRUE(has_instr);
+}

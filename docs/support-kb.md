@@ -369,18 +369,18 @@ even if the format itself is a camera RAW.
 - **XISF** — `.xisf` (PixInsight).
 - **Camera RAW** — `.nef` and `.nrw` (Nikon), `.cr2` (Canon), `.arw` and `.sr2`
   (Sony), `.dng` (Adobe), `.pef` (Pentax), `.srw` (Samsung), `.iiq` (Phase One).
+- **From the release after 0.6.10, also** — `.cr3` (recent Canon), `.raf`
+  (Fujifilm), `.orf` (Olympus / OM System), `.rw2` (Panasonic).
 
-**Not supported in 0.6.10 — this catches people out:**
+**`.cr3`, `.raf`, `.orf` and `.rw2` do not work on 0.6.10** — this catches people
+out. If a user with a Canon R-series camera says "my RAW files don't show up",
+**it is almost certainly a `.cr3`**. Ask which version they run:
 
-- **`.cr3`** (recent Canon), **`.raf`** (Fujifilm), **`.orf`** (Olympus / OM
-  System), **`.rw2`** (Panasonic).
-
-If a user with a Canon R-series camera says "my RAW files don't show up", **it is
-almost certainly a `.cr3`**, and the honest answer is that WinStellar does not
-support CR3 yet. Their workaround today is to convert to **DNG** (Adobe DNG
-Converter), which WinStellar reads. **If they quote a page or a screenshot that
-lists CR3, RAF, ORF or RW2 as supported, believe the user, not the page: that
-documentation is wrong.** Confirm the limitation and escalate so it gets fixed.
+- **On 0.6.10** — confirm the limitation. Their workaround today is to convert to
+  **DNG** (Adobe DNG Converter), which 0.6.10 reads. Updating once the next
+  release is out is the real fix.
+- **On a later version** — these formats are expected to work. If one does not
+  open, that is a genuine bug: escalate with the file.
 
 **Geometry limits:** an image is rejected above **100 000 pixels on either axis**
 or **1 gigapixel in total**. No real astronomy frame comes close; a file that
@@ -423,8 +423,8 @@ The user will paste the message. This is what each one means.
 **WinStellar**.
 The file could not be read. Genuine causes: the file is truncated or corrupt
 (interrupted download, bad transfer, dying drive), or it is a format WinStellar
-does not support (see the formats section — **`.cr3` is the usual culprit**). Ask
-for the exact reason shown after the colon.
+does not support (see the formats section — on 0.6.10, **`.cr3` is the usual
+culprit**). Ask for the exact reason shown after the colon.
 
 **`Status   analysis failed`** in the measurements panel.
 The image loaded and is displayed, but star detection and statistics could not
@@ -483,17 +483,19 @@ This is a deliberate trade-off — decoding every large frame while the user
 scrolls would freeze the folder. Explain it, don't apologise for it, and don't
 suggest a reinstall.
 
-### CR3, RAF, ORF and RW2 camera RAW files are not supported
+### CR3, RAF, ORF and RW2 camera RAW files are not supported on 0.6.10
 
 **Symptom:** "My Canon R6 / Fuji / Olympus / Panasonic RAW files show no
 thumbnail and won't open."
 
-**Cause:** WinStellar 0.6.10 reads the TIFF-derived RAW formats only. **`.cr3`,
-`.raf`, `.orf` and `.rw2` are not recognised at all.**
+**Cause:** 0.6.10 required the canonical TIFF marker, which those four formats do
+not carry, so **`.cr3`, `.raf`, `.orf` and `.rw2` are not recognised at all** on
+that version. **Fixed in the release after 0.6.10**, where all four are read.
 
-**Workaround:** convert to **DNG** with the free Adobe DNG Converter; WinStellar
-reads DNG. Escalate the request — this is a real gap, and if the user is quoting
-documentation that claims those formats work, that documentation is wrong.
+**Answer on 0.6.10:** convert to **DNG** with the free Adobe DNG Converter, which
+0.6.10 reads, or wait for the next release. **On any later version these formats
+are expected to work** — if one still does not open there, escalate with the
+file, that is a new bug and not this one.
 
 ### Parts of the inspection windows are in French (0.6.10 only)
 
@@ -534,6 +536,8 @@ heavily defocused frame there is nothing to measure, and the Tilt window says
 
 ## Troubleshooting — symptom → cause → answer
 
+### Troubleshooting — columns and thumbnails in Explorer
+
 **"My HFR / Stars column is empty."**
 Almost always the expected behaviour, not a bug. Explorer computes those columns
 directly only for **FITS of 32 MB or less**. For **XISF**, for **camera RAW**, and
@@ -555,10 +559,13 @@ Sign out of Windows and back in, then clear the thumbnail cache: **Disk Cleanup 
 tick Thumbnails → clean**. Windows caches thumbnails very aggressively. Also check
 the folder is actually in a thumbnail view (Large icons or bigger), not Details.
 
+### Troubleshooting — files that won't open, formats, associations
+
 **"My RAW files don't open / have no thumbnail."**
 Check the extension first. `.nef`, `.nrw`, `.cr2`, `.arw`, `.sr2`, `.dng`, `.pef`,
-`.srw`, `.iiq` work. **`.cr3`, `.raf`, `.orf`, `.rw2` are not supported** — convert
-to DNG, and escalate.
+`.srw`, `.iiq` work on every version. **`.cr3`, `.raf`, `.orf`, `.rw2` do not work
+on 0.6.10** — convert to DNG or update once the next release is out. On a later
+version they should work; if they don't, escalate with the file.
 
 **"Double-clicking my NEF opens my photo app, not WinStellar."**
 Deliberate. WinStellar claims `.fit`, `.fits` and `.xisf` as default, and leaves
@@ -569,12 +576,16 @@ The **RAW** button is active — that is the linear data, and a linear astronomy
 really is nearly black. Click **Auto** (auto stretch) in the toolbar, or press
 **Ctrl+H** and use the **Auto** button in the histogram window.
 
+### Troubleshooting — installing, updating, SmartScreen
+
 **"Windows says the publisher is unknown."**
 Expected — WinStellar is not signed yet. **More info → Run anyway.** Safe.
 
 **"How do I update?"**
 By hand: download the latest installer from https://winstellar.fr and run it over
 the existing install. WinStellar does not check for updates by itself.
+
+### Troubleshooting — the viewer, the inspection windows, speed
 
 **"The tilt / aberration window is empty or says `No stars analysed`."**
 No stars were detected in that frame. Normal on darks, biases, flats, clouded or

@@ -21,10 +21,15 @@ public:
                                                                   // for any real
                                                                   // XISF XML header
                                                                   // and any sane FITS
-    // Camera RAW carries its EXIF/TIFF metadata near the start; a few MB covers
-    // it, so the property handler needn't read tens of MB per NEF while Explorer
-    // scrolls a folder of them.
-    static constexpr size_t kRawHeaderCap = 2ull * 1024 * 1024;   // 2 MB
+    // Camera RAW carries its EXIF/TIFF metadata near the start, so the property
+    // handler needn't read tens of MB per file while Explorer scrolls a folder.
+    // Measured minimum window per format (RawIntegration
+    // .MetadataParsesFromTheHeaderWindowAlone pins this): NEF, CR3, ORF and RW2
+    // all parse from 256 KB, but Fujifilm RAF stores its metadata behind a large
+    // embedded JPEG preview and needs 3 MB on an X-T4 -- bodies with bigger
+    // previews may need more still. 4 MB covers every sample we have while
+    // staying 8x below the generic header cap.
+    static constexpr size_t kRawHeaderCap = 4ull * 1024 * 1024;   // 4 MB
 
     HRESULT init(IStream* stream, size_t max_bytes = kHardCap);
     void clear() noexcept { buffer_.reset(); size_ = 0; total_size_ = 0; }

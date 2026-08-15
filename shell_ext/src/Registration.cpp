@@ -12,12 +12,13 @@ namespace {
 constexpr const wchar_t* kProgId = L"WinStellar.Image";
 
 // Extensions whose Explorer thumbnail / preview / property handlers we own.
-// FITS + XISF plus the TIFF-based camera RAW set (mirrors raw_loader::is_raw
-// and the viewer's has_astro_extension). Single source for both register and
+// FITS + XISF plus the camera RAW set (mirrors raw_loader::is_raw and the
+// viewer's has_astro_extension). Single source for both register and
 // unregister so they can't drift.
 constexpr const wchar_t* kAllExts[] = {
     L".fit", L".fits", L".xisf",
-    L".nef", L".nrw", L".cr2", L".arw", L".sr2", L".dng", L".pef", L".srw", L".iiq",
+    L".nef", L".nrw", L".cr2", L".cr3", L".arw", L".sr2", L".dng", L".pef",
+    L".srw", L".iiq", L".raf", L".orf", L".rw2",
 };
 // Subset we also claim as the default double-click association -- only the
 // formats Windows has no native handler for. RAW keeps the user's photo app as
