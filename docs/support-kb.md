@@ -10,8 +10,9 @@ them for one of these:
 
 - **Settings → Apps → Installed apps → WinStellar** — the version is listed there.
 - Right-click `C:\Program Files\WinStellar\WinStellar.exe` → **Properties →
-  Details → File version** — this one also carries the git commit and the build
-  date.
+  Details → File version**. The **Comments** field on that same tab additionally
+  carries the exact build — commit and date, e.g. `0.7.0 (a7048bb1, 2026-08-15)`
+  — which is what to ask for when a bug report needs pinning to a build.
 
 **The interface is in English. On 0.6.10 and earlier a few labels in the
 inspection windows were in French** — *« Carte du fond »*, *« Visuel »*,

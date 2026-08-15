@@ -15,10 +15,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Build provenance: capture the git SHA + dirty-tree flag at configure time
 # so the VERSIONINFO carries traceable build metadata. `scripts/build.ps1`
 # re-runs configure on every build, so the values stay fresh.
-find_package(Git QUIET)
+# FITS_GIT_SHA / FITS_GIT_DIRTY can be supplied through the environment when
+# git is not visible to CMake. That is the normal case for a Windows build
+# driven from a WSL checkout: git lives on the Linux side, and find_package(Git)
+# finds nothing, which used to stamp every such build "unknown".
 set(FITS_GIT_SHA "unknown")
 set(FITS_GIT_DIRTY 0)
-if(GIT_FOUND)
+if(DEFINED ENV{FITS_GIT_SHA} AND NOT "$ENV{FITS_GIT_SHA}" STREQUAL "")
+    set(FITS_GIT_SHA "$ENV{FITS_GIT_SHA}")
+    if("$ENV{FITS_GIT_DIRTY}" STREQUAL "1")
+        set(FITS_GIT_DIRTY 1)
+    endif()
+endif()
+find_package(Git QUIET)
+if(GIT_FOUND AND FITS_GIT_SHA STREQUAL "unknown")
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" rev-parse --short=8 HEAD
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
