@@ -36,7 +36,7 @@ suite** (tilt, aberration, background).
 | 🗂️ **Explorer integration** | **Thumbnails**, a **preview pane** (Alt+P) with automatic stretch, and **sortable metadata + quality columns** for FITS/XISF — right in Explorer. Triage your subs without opening anything. |
 | 📊 **Quality metrics** | Per-file **HFR**, **FWHM**, **eccentricity**, **star count** and pixel stats, exposed as native Windows columns. Sort a folder by HFR to surface your sharpest frames instantly. |
 | 🔬 **Inspection suite** | **Star annotation**, **tilt & field-curvature** detection, an **optical-aberration** PSF plate, and a **background / illumination** map — to diagnose your optical train at a glance. |
-| 🖼️ **Standalone viewer** | Smooth **zoom / pan / rotate**, non-linear **auto-stretch**, histogram & stretch controls, and a clean **dark UI**. |
+| 🖼️ **Standalone viewer** | Smooth **zoom / pan / rotate**, non-linear **auto-stretch**, histogram & stretch controls, a clean **dark UI**, and **export** to JPG / PNG / TIFF / FITS. |
 | 🌈 **Color & RAW** | One-shot-color **Bayer debayering** and **camera-RAW** decoding across all major manufacturers, rendered in color through the same pipeline as FITS. |
 | ⚡ **Light & native** | A small native **Win32 / Direct2D** app — no runtime, no clutter. A **SQLite** analysis cache makes re-browsing a folder instant. |
 
@@ -45,6 +45,11 @@ suite** (tilt, aberration, background).
 - **FITS** — `.fit`, `.fits` (mono, OSC/Bayer, and 3-plane RGB cubes)
 - **XISF** — PixInsight `.xisf`
 - **Camera RAW** — NEF/NRW (Nikon), CR2/CR3 (Canon), ARW/SR2 (Sony), DNG (Adobe), RAF (Fuji), ORF (Olympus), RW2 (Panasonic), PEF (Pentax), SRW (Samsung), IIQ (Phase One)
+
+**Export** — JPG and PNG carry the image as displayed (stretch applied); TIFF
+(16-bit) and FITS carry the linear, unstretched data. The FITS export keeps the
+original headers and, for one-shot-colour frames, the original CFA mosaic. The
+opened file is never modified.
 
 ## Installation
 
@@ -67,6 +72,8 @@ The installer registers the shell extensions, restarts Explorer, and adds an ent
    *Stars*, *Object*… — then **sort by HFR** to bring your sharpest subs to the top.
 4. **Double-click** a frame to open the viewer. Use the **Inspection** menu for tilt,
    aberration and background analysis.
+5. **Export** the frame with **Ctrl+S** — JPG/PNG for what you see, TIFF/FITS for
+   the unstretched data.
 
 ## Screenshots
 
@@ -147,7 +154,7 @@ the installer. The VERSIONINFO of every binary embeds version, git short SHA and
 **Project layout:**
 
 ```
-fits_core/    Static library — FITS / XISF / RAW loading, stretch, analysis
+fits_core/    Static library — FITS / XISF / RAW loading, stretch, analysis, export
 shell_ext/    Preview / Property / Thumbnail handlers (a single COM DLL)
 viewer/       Standalone Win32 + Direct2D viewer
 scripts/      PowerShell helpers (build, register, release, version bump)
