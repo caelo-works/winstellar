@@ -101,6 +101,18 @@ The installer restarts Explorer for you, so this is rare — but when it happens
    or bigger), the preview pane is toggled with **Alt+P**, and the columns must
    be **added by hand** — see the columns section.
 
+### Updating to a newer version
+
+There is no in-app updater and no update notification. The user downloads the
+newer installer from https://winstellar.fr and **runs it over the existing
+install** — there is no need to uninstall first, and the analysis cache is kept.
+
+**Running the installer is what registers the Explorer extensions.** So when a
+release adds support for new file types, those files get thumbnails, preview and
+columns **only after the new installer has been run**. If someone updates and a
+newly supported format still looks inert in Explorer, ask first whether they ran
+the installer, then have them sign out and back in.
+
 ### Uninstalling
 
 **Settings → Apps → Installed apps → WinStellar → Uninstall.** It unregisters the
@@ -370,7 +382,9 @@ even if the format itself is a camera RAW.
 - **Camera RAW** — `.nef` and `.nrw` (Nikon), `.cr2` (Canon), `.arw` and `.sr2`
   (Sony), `.dng` (Adobe), `.pef` (Pentax), `.srw` (Samsung), `.iiq` (Phase One).
 - **From the release after 0.6.10, also** — `.cr3` (recent Canon), `.raf`
-  (Fujifilm), `.orf` (Olympus / OM System), `.rw2` (Panasonic).
+  (Fujifilm), `.orf` (Olympus / OM System), `.rw2` (Panasonic). These four need
+  the **new installer to have been run**, since that is what registers the
+  Explorer extensions for them — updating by any other means will not do it.
 
 **`.cr3`, `.raf`, `.orf` and `.rw2` do not work on 0.6.10** — this catches people
 out. If a user with a Canon R-series camera says "my RAW files don't show up",
@@ -493,9 +507,13 @@ not carry, so **`.cr3`, `.raf`, `.orf` and `.rw2` are not recognised at all** on
 that version. **Fixed in the release after 0.6.10**, where all four are read.
 
 **Answer on 0.6.10:** convert to **DNG** with the free Adobe DNG Converter, which
-0.6.10 reads, or wait for the next release. **On any later version these formats
-are expected to work** — if one still does not open there, escalate with the
-file, that is a new bug and not this one.
+0.6.10 reads, or wait for the next release.
+
+**On any later version these formats are expected to work.** If one still does
+not show up there, the usual reason is that **the new installer was never run** —
+registering the Explorer extensions for the new extensions is what the installer
+does. Have them run it, then sign out and back in. If it still fails after that,
+escalate with the file: that is a new bug, not this one.
 
 ### Parts of the inspection windows are in French (0.6.10 only)
 
@@ -583,7 +601,9 @@ Expected — WinStellar is not signed yet. **More info → Run anyway.** Safe.
 
 **"How do I update?"**
 By hand: download the latest installer from https://winstellar.fr and run it over
-the existing install. WinStellar does not check for updates by itself.
+the existing install. WinStellar does not check for updates by itself. Running
+the installer is also what registers the Explorer extensions, so it is the only
+way a release's new file types start showing thumbnails and columns.
 
 ### Troubleshooting — the viewer, the inspection windows, speed
 
@@ -607,6 +627,12 @@ It should not be from 0.6.10 onward — that release specifically fixed scroll
 freezes on folders of camera RAW. Ask for the WinStellar version first (Settings →
 Apps → Installed apps). If they are on **0.6.10 or later** and it still freezes,
 that is a genuine regression: collect the details below and escalate.
+
+**"Fujifilm thumbnails take longer to appear than my other RAW files."**
+Expected. Fujifilm's X-Trans sensor data has to be decompressed before anything
+can be drawn, and that step cannot be shortened the way the rest of the decode
+can. A folder of `.raf` fills in several times slower than the same folder of
+`.nef` or `.cr3` on the same machine. It is slower, not stuck — nothing to fix.
 
 ---
 
