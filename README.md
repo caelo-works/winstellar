@@ -39,6 +39,7 @@ suite** (tilt, aberration, background).
 | 🖼️ **Standalone viewer** | Smooth **zoom / pan / rotate**, non-linear **auto-stretch**, histogram & stretch controls, a clean **dark UI**, and **export** to JPG / PNG / TIFF / FITS. |
 | 🌈 **Color & RAW** | One-shot-color **Bayer debayering** and **camera-RAW** decoding across all major manufacturers, rendered in color through the same pipeline as FITS. |
 | ⚡ **Light & native** | A small native **Win32 / Direct2D** app — no runtime, no clutter. A **SQLite** analysis cache makes re-browsing a folder instant. |
+| 🔄 **Stays current** | Checks once a day for a new release and offers to install it, verifying the download against its published SHA-256. Off with a single registry value. |
 
 ## Supported formats
 

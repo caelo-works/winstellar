@@ -24,6 +24,7 @@
 #include "Histogram.h"
 #include "AberrationView.h"
 #include "ImageExport.h"
+#include "UpdateCheck.h"
 #include "TiltView.h"
 #include "BackgroundView.h"
 
@@ -239,6 +240,14 @@ private:
     void export_main();
     void submit_export(wsx::ExportRequest job);             // UI thread
     void on_export_finished(wsx::ExportOutcome* out);
+
+    // Update check. Fires once per day at startup on a detached-free worker
+    // thread (joined at shutdown like every other), then prompts on the UI
+    // thread. Never blocks startup and never downloads without being asked.
+    std::thread update_thread_;
+    void start_update_check();
+    void on_update_available(wsu::UpdateCheckResult* r);
+    void run_update(const wsu::UpdateCheckResult& r);
 
     // load slot
     bool                                       pending_load_       = false;

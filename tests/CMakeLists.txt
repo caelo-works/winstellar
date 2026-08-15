@@ -57,6 +57,13 @@ target_include_directories(unit_rotation PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
 winstellar_add_test_exe(unit_export_geometry unit_export_geometry.cpp)
 target_include_directories(unit_export_geometry PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
 
+# Update-check decisions: pure logic, deliberately kept free of Windows API so
+# the parts that gate downloading and running an installer are unit-tested.
+winstellar_add_test_exe(unit_update_info
+    unit_update_info.cpp
+    ${CMAKE_SOURCE_DIR}/viewer/src/UpdateInfo.cpp)
+target_include_directories(unit_update_info PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
+
 # ---------- Phase 2: integration tests (file/buffer I/O) -------------------
 winstellar_add_test_exe(integration_fits_loader integration_fits_loader.cpp)
 winstellar_add_test_exe(integration_xisf        integration_xisf.cpp)
@@ -127,6 +134,22 @@ target_compile_definitions(smoke_export PRIVATE
 # The LABELS property matters: scripts/test.ps1 and CI filter on
 # --label-regex winstellar, so a target without it builds and never runs.
 gtest_discover_tests(smoke_export
+    PROPERTIES LABELS "winstellar;smoke"
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------- Phase 6: update-check smoke -----------------------------------
+# Live check against the release server. Skips (never fails) without network.
+add_executable(smoke_update smoke_update.cpp)
+target_link_libraries(smoke_update PRIVATE GTest::gtest GTest::gtest_main)
+set_target_properties(smoke_update PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+)
+add_dependencies(smoke_update WinStellar)
+target_compile_definitions(smoke_update PRIVATE
+    WINSTELLAR_EXE_PATH="$<TARGET_FILE:WinStellar>"
+)
+gtest_discover_tests(smoke_update
     PROPERTIES LABELS "winstellar;smoke"
     DISCOVERY_TIMEOUT 60
 )

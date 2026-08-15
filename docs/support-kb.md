@@ -105,9 +105,17 @@ The installer restarts Explorer for you, so this is rare — but when it happens
 
 ### Updating to a newer version
 
-There is no in-app updater and no update notification. The user downloads the
-newer installer from https://winstellar.fr and **runs it over the existing
-install** — there is no need to uninstall first, and the analysis cache is kept.
+**From 0.9.0, WinStellar checks for updates itself.** At startup, at most once a
+day, it asks GitHub what the latest published version is. If there is a newer one
+it offers to download and install it: the installer is verified against its
+published SHA-256 before anything runs, Windows asks for administrator rights, and
+WinStellar closes so the installer can replace its files. Declining changes
+nothing, and a failed check is silent — no error box.
+
+**Before 0.9.0 there is no update check at all.** Those users download the newer
+installer from https://winstellar.fr and **run it over the existing install** —
+there is no need to uninstall first, and the analysis cache is kept. That manual
+route still works on every version.
 
 **Running the installer is what registers the Explorer extensions.** So when a
 release adds support for new file types, those files get thumbnails, preview and
@@ -419,6 +427,39 @@ complete, so an interrupted export leaves the previous file untouched.
 
 ---
 
+## Updates — how WinStellar checks, and how to turn it off
+
+**Only from 0.9.0.** Earlier versions never check; see the installation section.
+
+**What it does.** At startup, at most **once a day**, WinStellar asks GitHub for
+the latest published version number. Nothing is downloaded at that point. If a
+newer version exists, it shows a message offering to install it. **Declining does
+nothing at all**, and it will not ask again that day.
+
+**If the user accepts**, WinStellar downloads the installer, **checks it against
+the SHA-256 published alongside it**, and refuses to run anything if the two do not
+match. Windows then asks for administrator rights — the installer needs them — and
+WinStellar closes so its files can be replaced.
+
+**A failed check is silent.** No error box on a flaky connection.
+
+**It never downgrades.** A published version older than the one running is never
+offered.
+
+**To turn it off**, set the `UpdateCheck` value to `0` under
+`HKEY_CURRENT_USER\Software\WinStellar` (a DWORD, `1` by default). There is no
+setting in the interface yet. The same key holds `UpdateLastCheck`, the date of
+the last check.
+
+**What is sent:** nothing but an ordinary HTTPS request to github.com for the
+latest release address. No account, no identifier, no usage data.
+
+**"Windows says the publisher is unknown during the update"** — expected, and the
+same as a manual install: WinStellar is not code-signed yet. The download has
+already been checked against its published SHA-256.
+
+---
+
 ## Supported formats and file extensions
 
 **Only these extensions are recognised.** A file whose extension is not on this
@@ -581,12 +622,13 @@ WinStellar is **not code-signed yet**. Every fresh install triggers SmartScreen'
 *"publisher unknown"* warning: **More info → Run anyway**. It is not a malware
 detection. This is by far the most reported non-bug.
 
-### There is no automatic update
+### There is no automatic update before 0.9.0
 
-WinStellar **never checks for updates and never notifies the user** of a new
-version. To update, the user downloads the latest installer from
-https://winstellar.fr and runs it over the existing install. Automatic updating
-is a known missing feature, not a broken one.
+On **0.8.0 and earlier**, WinStellar **never checks for updates and never notifies
+the user** of a new version. Those users have to download the installer from
+https://winstellar.fr themselves. It is a known missing feature on those versions,
+not a broken one — **fixed in 0.9.0**, which checks once a day and offers to
+install.
 
 ### The background map needs an image at least 800 px on its short side
 
@@ -650,10 +692,12 @@ really is nearly black. Click **Auto** (auto stretch) in the toolbar, or press
 Expected — WinStellar is not signed yet. **More info → Run anyway.** Safe.
 
 **"How do I update?"**
-By hand: download the latest installer from https://winstellar.fr and run it over
-the existing install. WinStellar does not check for updates by itself. Running
-the installer is also what registers the Explorer extensions, so it is the only
-way a release's new file types start showing thumbnails and columns.
+**From 0.9.0** WinStellar tells you: it checks once a day at startup and offers to
+download and install the new version for you. On **0.8.0 and earlier** it is by
+hand — download the latest installer from https://winstellar.fr and run it over the
+existing install. Either way, running the installer is what registers the Explorer
+extensions, so it is the only way a release's new file types start showing
+thumbnails and columns.
 
 ### Troubleshooting — the viewer, the inspection windows, speed
 

@@ -9,6 +9,7 @@
 #include "fits_core/cache.h"
 #include "fits_core/fits_writer.h"
 #include "fits_version.h"
+#include "UpdateCheck.h"
 
 #include <commdlg.h>
 #include <dwmapi.h>
@@ -226,6 +227,8 @@ constexpr UINT  WM_APP_ANALYSIS_DONE = WM_APP + 6;
 // nulled, so a late PostMessageW fails and leaks its payload. A few hundred
 // bytes is benign; a RenderedBitmap would be hundreds of megabytes.
 constexpr UINT  WM_APP_EXPORT_DONE = WM_APP + 7;
+// Update-check worker -> UI postback. lParam = wsu::UpdateCheckResult*.
+constexpr UINT  WM_APP_UPDATE_DONE = WM_APP + 8;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -383,6 +386,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     worker_thread_  = std::thread([this] { worker_main(); });
     inspect_thread_ = std::thread([this] { inspect_worker_main(); });
     export_thread_  = std::thread([this] { export_main(); });
+    start_update_check();
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -443,6 +447,7 @@ int ViewerWindow::run_message_loop() {
     if (worker_thread_.joinable())  worker_thread_.join();
     if (inspect_thread_.joinable()) inspect_thread_.join();
     if (export_thread_.joinable())  export_thread_.join();
+    if (update_thread_.joinable())  update_thread_.join();
     // Workers are stopped -- nothing more will be posted. Free anything still
     // queued so its heap payload doesn't leak (#29).
     drain_worker_messages();
@@ -548,6 +553,9 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             return 0;
         case WM_APP_EXPORT_DONE:
             self->on_export_finished(reinterpret_cast<wsx::ExportOutcome*>(lp));
+            return 0;
+        case WM_APP_UPDATE_DONE:
+            self->on_update_available(reinterpret_cast<wsu::UpdateCheckResult*>(lp));
             return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
@@ -722,7 +730,7 @@ void ViewerWindow::drain_worker_messages() {
     // never dispatched) would leak, so delete their payloads here. Types are
     // complete at this point, unlike in destroy() further up the file.
     MSG msg;
-    while (::PeekMessageW(&msg, hwnd_, WM_APP_LOAD_DONE, WM_APP_EXPORT_DONE, PM_REMOVE)) {
+    while (::PeekMessageW(&msg, hwnd_, WM_APP_LOAD_DONE, WM_APP_UPDATE_DONE, PM_REMOVE)) {
         switch (msg.message) {
             case WM_APP_LOAD_DONE:     delete reinterpret_cast<LoadResult*>(msg.lParam);   break;
             case WM_APP_RENDER_DONE:   delete reinterpret_cast<RenderResult*>(msg.lParam); break;
@@ -731,6 +739,7 @@ void ViewerWindow::drain_worker_messages() {
             case WM_APP_PSF_DONE:      delete reinterpret_cast<PsfResult*>(msg.lParam);    break;
             case WM_APP_ANALYSIS_DONE: delete reinterpret_cast<LoadAnalysis*>(msg.lParam); break;
             case WM_APP_EXPORT_DONE:   delete reinterpret_cast<wsx::ExportOutcome*>(msg.lParam); break;
+            case WM_APP_UPDATE_DONE:   delete reinterpret_cast<wsu::UpdateCheckResult*>(msg.lParam); break;
         }
     }
 }
@@ -946,6 +955,72 @@ void ViewerWindow::on_export_finished(wsx::ExportOutcome* raw) {
     if (exporting_ > 0) export_status_ = L"Exporting…";
     update_title();
     toolbar_.set_enabled(kCmd_Export, image_ && !image_->empty() && exporting_ == 0);
+}
+
+// Update check. The whole point of #9 is that people stay on versions with known
+// parser vulnerabilities because nothing ever tells them; so this runs by default,
+// at most once a day, and can be switched off.
+void ViewerWindow::start_update_check() {
+    if (!wsu::update_check_enabled() || !wsu::should_check_today()) return;
+
+    update_thread_ = std::thread([this] {
+        auto r = std::make_unique<wsu::UpdateCheckResult>(
+            wsu::check_for_update(wsu::parse_version(FITS_VERSION_STR)));
+        wsu::mark_checked_today();
+        // A failed check is silent on purpose: a transient network problem must
+        // not greet the user with an error box every morning.
+        if (!r->available) return;
+        if (!::PostMessageW(hwnd_, WM_APP_UPDATE_DONE, 0,
+                            reinterpret_cast<LPARAM>(r.get())))
+            return;                    // window gone; unique_ptr frees it
+        r.release();
+    });
+}
+
+void ViewerWindow::on_update_available(wsu::UpdateCheckResult* raw) {
+    std::unique_ptr<wsu::UpdateCheckResult> r(raw);
+    if (!r || !r->available) return;
+
+    wchar_t msg[640];
+    ::swprintf_s(msg,
+        L"WinStellar %hs is available — you are running %hs.\n\n"
+        L"Updates include fixes to the code that reads image files, which also runs "
+        L"inside Windows Explorer.\n\n"
+        L"Download and install it now? The installer will ask for administrator "
+        L"rights, and WinStellar will close.",
+        (r->tag.empty() ? "?" : r->tag.c_str() + (r->tag[0] == 'v' ? 1 : 0)),
+        FITS_VERSION_STR);
+
+    if (::MessageBoxW(hwnd_, msg, L"WinStellar — Update available",
+                      MB_YESNO | MB_ICONINFORMATION) != IDYES)
+        return;
+    run_update(*r);
+}
+
+void ViewerWindow::run_update(const wsu::UpdateCheckResult& r) {
+    // Download and verification are seconds of network on a small file; done
+    // inline with a wait cursor rather than adding a fifth thread for one click.
+    HCURSOR prev = ::SetCursor(::LoadCursorW(nullptr, IDC_WAIT));
+    const wsu::InstallResult res = wsu::download_and_verify(r);
+    ::SetCursor(prev);
+
+    if (!res.success) {
+        ::MessageBoxW(hwnd_,
+                      res.error.empty() ? L"The update could not be installed."
+                                        : res.error.c_str(),
+                      L"WinStellar — Update", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    if (!wsu::launch_installer(res.installer_path)) {
+        ::MessageBoxW(hwnd_,
+                      L"The installer was downloaded and verified, but could not be "
+                      L"started. You can run it yourself from your Downloads.",
+                      L"WinStellar — Update", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // Close so the installer can replace our files and restart Explorer.
+    ::PostMessageW(hwnd_, WM_CLOSE, 0, 0);
 }
 
 void ViewerWindow::inspect_worker_main() {

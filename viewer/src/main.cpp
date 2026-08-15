@@ -5,6 +5,7 @@
 #include <cwchar>
 
 #include "ImageExport.h"
+#include "UpdateCheck.h"
 #include "ViewerWindow.h"
 #include "fits_core/fits_loader.h"
 #include "fits_core/fits_stretch.h"
@@ -121,6 +122,52 @@ int run_export_cli(int argc, wchar_t** argv) {
     return 0;
 }
 
+// Headless update check:
+//   WinStellar.exe --check-update [X.Y.Z] [--download]
+// The optional version is treated as the running one, so the "an update exists"
+// path can be exercised without waiting for a newer release -- useful for tests
+// and for answering "what would a 0.7.0 user see?". --download additionally
+// fetches and verifies the installer but never runs it.
+// Exit 0 = up to date, 10 = update available (and verified if --download),
+// 1 = the check or the verification failed.
+int run_update_check_cli(int argc, wchar_t** argv) {
+    wsu::Version current = wsu::parse_version(FITS_VERSION_STR);
+    bool download = false;
+    for (int i = 2; i < argc; ++i) {
+        if (std::wcscmp(argv[i], L"--download") == 0) { download = true; continue; }
+        char buf[64] = {};
+        ::WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+        const wsu::Version v = wsu::parse_version(buf);
+        if (v.valid()) current = v;
+    }
+
+    std::wprintf(L"current %d.%d.%d\n", current.major, current.minor, current.patch);
+    const wsu::UpdateCheckResult r = wsu::check_for_update(current);
+    if (!r.error.empty()) {
+        std::fwprintf(stderr, L"check failed: %hs\n", r.error.c_str());
+        return 1;
+    }
+    std::wprintf(L"latest %d.%d.%d (%hs)\n", r.version.major, r.version.minor,
+                 r.version.patch, r.tag.c_str());
+    if (!r.available) {
+        std::wprintf(L"up to date\n");
+        return 0;
+    }
+    std::wprintf(L"update available\n");
+    if (!download) return 10;
+
+    const wsu::InstallResult ir = wsu::download_and_verify(r);
+    if (!ir.success) {
+        std::fwprintf(stderr, L"download/verify failed: %s\n", ir.error.c_str());
+        return 1;
+    }
+    std::wprintf(L"verified %s\nsignature %s\n", ir.installer_path.c_str(),
+                 ir.signature == wsu::SignatureState::Valid    ? L"valid"
+               : ir.signature == wsu::SignatureState::Unsigned ? L"unsigned"
+                                                               : L"invalid");
+    return 10;
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
@@ -132,6 +179,18 @@ int APIENTRY wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     // --check <file>: headless validation path used by CI / scripting; never
     // opens a window. Stay parse-tolerant — argv[0] is always the exe path.
+    if (argc >= 2 && std::wcscmp(argv[1], L"--check-update") == 0) {
+        if (::AttachConsole(ATTACH_PARENT_PROCESS)) {
+            FILE* fp = nullptr;
+            freopen_s(&fp, "CONOUT$", "w", stdout);
+            freopen_s(&fp, "CONOUT$", "w", stderr);
+        }
+        const int rc = run_update_check_cli(argc, argv);
+        if (argv) ::LocalFree(argv);
+        ::CoUninitialize();
+        return rc;
+    }
+
     if (argc >= 2 && std::wcscmp(argv[1], L"--export") == 0) {
         if (::AttachConsole(ATTACH_PARENT_PROCESS)) {
             FILE* fp = nullptr;
