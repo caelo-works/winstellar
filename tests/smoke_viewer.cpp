@@ -15,10 +15,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// The exe path is baked in as a narrow literal; widen it once, here. Never
+// build the range from two separate mentions of WINSTELLAR_EXE_PATH: without
+// string pooling (/GF, off in Debug) each mention is a distinct array object,
+// so [first, last) spans two unrelated literals and _ITERATOR_DEBUG_LEVEL
+// fastfails on the transposed pointer range.
+std::wstring viewer_exe_path() {
+    const std::string narrow = WINSTELLAR_EXE_PATH;
+    return std::wstring(narrow.begin(), narrow.end());
+}
+
 DWORD run_viewer_check(const std::wstring& file_path, DWORD timeout_ms = 30000) {
     std::wstring cmdline = L"\"";
-    cmdline += std::wstring(WINSTELLAR_EXE_PATH, WINSTELLAR_EXE_PATH +
-                            std::char_traits<char>::length(WINSTELLAR_EXE_PATH));
+    cmdline += viewer_exe_path();
     cmdline += L"\" --check \"";
     cmdline += file_path;
     cmdline += L"\"";
@@ -82,8 +91,7 @@ TEST(ViewerSmoke, CheckFailsOnMissingFile) {
 TEST(ViewerSmoke, CheckFailsWithoutPath) {
     // --check alone (no file argument) should fail-fast with exit 1.
     std::wstring cmdline = L"\"";
-    cmdline += std::wstring(WINSTELLAR_EXE_PATH, WINSTELLAR_EXE_PATH +
-                            std::char_traits<char>::length(WINSTELLAR_EXE_PATH));
+    cmdline += viewer_exe_path();
     cmdline += L"\" --check";
 
     STARTUPINFOW si{}; si.cb = sizeof(si);
