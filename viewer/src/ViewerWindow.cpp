@@ -7,6 +7,8 @@
 #include "fits_core/background.h"
 #include "fits_core/psf.h"
 #include "fits_core/cache.h"
+#include "fits_core/fits_writer.h"
+#include "fits_version.h"
 
 #include <commdlg.h>
 #include <dwmapi.h>
@@ -200,6 +202,12 @@ constexpr int kCmd_InspectStars   = 115;
 constexpr int kCmd_InspectTilt    = 116;
 constexpr int kCmd_InspectPanel   = 118;
 constexpr int kCmd_InspectBackground = 119;
+// Export: the toolbar button opens a format menu; the four items do the work.
+constexpr int kCmd_Export         = 120;
+constexpr int kCmd_ExportJpg      = 121;
+constexpr int kCmd_ExportPng      = 122;
+constexpr int kCmd_ExportTif      = 123;
+constexpr int kCmd_ExportFits     = 124;
 
 // Worker → UI postback. wParam = generation, lParam = ViewerWindow::LoadResult*.
 constexpr UINT  WM_APP_LOAD_DONE   = WM_APP + 1;
@@ -213,6 +221,11 @@ constexpr UINT  WM_APP_BG_DONE = WM_APP + 4;
 constexpr UINT  WM_APP_PSF_DONE = WM_APP + 5;
 // Load's analysis half → UI postback. lParam = ViewerWindow::LoadAnalysis*.
 constexpr UINT  WM_APP_ANALYSIS_DONE = WM_APP + 6;
+// Export worker -> UI postback. lParam = wsx::ExportOutcome*. Carries only a
+// small status struct, never pixels: at shutdown hwnd_ is destroyed but never
+// nulled, so a late PostMessageW fails and leaks its payload. A few hundred
+// bytes is benign; a RenderedBitmap would be hundreds of megabytes.
+constexpr UINT  WM_APP_EXPORT_DONE = WM_APP + 7;
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -347,6 +360,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     toolbar_.set_stretch_auto_active(true);  // default = auto stretch
     toolbar_.set_stretch_none_active(false);
     toolbar_.set_nav_enabled(false);         // no file yet → Prev/Next greyed
+    toolbar_.set_enabled(kCmd_Export, false);// nothing to export yet
 
     histogram_.create(hwnd_, hinst);
     histogram_.set_on_changed([this](const fitsx::StretchParams& p) {
@@ -368,6 +382,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
 
     worker_thread_  = std::thread([this] { worker_main(); });
     inspect_thread_ = std::thread([this] { inspect_worker_main(); });
+    export_thread_  = std::thread([this] { export_main(); });
 
     analysis_.create(hwnd_, hinst, kIdAnalysisList);
     headers_.create(hwnd_, hinst, kIdHeaderList);
@@ -381,6 +396,7 @@ bool ViewerWindow::create(HINSTANCE hinst, const wchar_t* initial_path) {
     // reaches the focus window).
     ACCEL accel_entries[] = {
         {FCONTROL | FVIRTKEY,           'O',         kCmd_Open},
+        {FCONTROL | FVIRTKEY,           'S',         kCmd_Export},
         {FVIRTKEY,                       'A',         kCmd_ToggleAnalysis},
         {FVIRTKEY,                       'H',         kCmd_ToggleHeaders},
         {FVIRTKEY,                       'F',         kCmd_FitToWindow},
@@ -423,8 +439,10 @@ int ViewerWindow::run_message_loop() {
     }
     worker_cv_.notify_all();
     inspect_cv_.notify_all();
+    export_cv_.notify_all();
     if (worker_thread_.joinable())  worker_thread_.join();
     if (inspect_thread_.joinable()) inspect_thread_.join();
+    if (export_thread_.joinable())  export_thread_.join();
     // Workers are stopped -- nothing more will be posted. Free anything still
     // queued so its heap payload doesn't leak (#29).
     drain_worker_messages();
@@ -528,6 +546,9 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             self->on_load_analysis_finished(static_cast<std::uint64_t>(wp),
                                             reinterpret_cast<LoadAnalysis*>(lp));
             return 0;
+        case WM_APP_EXPORT_DONE:
+            self->on_export_finished(reinterpret_cast<wsx::ExportOutcome*>(lp));
+            return 0;
         case WM_DESTROY:
             save_window_placement(hwnd);
             ::PostQuitMessage(0);
@@ -606,6 +627,12 @@ void ViewerWindow::update_title() {
         swprintf_s(title, L"WinStellar — %s — %d%%", loaded_path_.c_str(), zoom_pct);
     } else {
         swprintf_s(title, L"WinStellar — %d%%", zoom_pct);
+    }
+    // There is no progress bar: neither WIC nor CFITSIO reports progress. The
+    // title suffix and the greyed Export button are the feedback.
+    if (!export_status_.empty()) {
+        ::wcsncat_s(title, L"  —  ", _TRUNCATE);
+        ::wcsncat_s(title, export_status_.c_str(), _TRUNCATE);
     }
     ::SetWindowTextW(hwnd_, title);
 }
@@ -695,7 +722,7 @@ void ViewerWindow::drain_worker_messages() {
     // never dispatched) would leak, so delete their payloads here. Types are
     // complete at this point, unlike in destroy() further up the file.
     MSG msg;
-    while (::PeekMessageW(&msg, hwnd_, WM_APP_LOAD_DONE, WM_APP_ANALYSIS_DONE, PM_REMOVE)) {
+    while (::PeekMessageW(&msg, hwnd_, WM_APP_LOAD_DONE, WM_APP_EXPORT_DONE, PM_REMOVE)) {
         switch (msg.message) {
             case WM_APP_LOAD_DONE:     delete reinterpret_cast<LoadResult*>(msg.lParam);   break;
             case WM_APP_RENDER_DONE:   delete reinterpret_cast<RenderResult*>(msg.lParam); break;
@@ -703,6 +730,7 @@ void ViewerWindow::drain_worker_messages() {
             case WM_APP_BG_DONE:       delete reinterpret_cast<BgResult*>(msg.lParam);     break;
             case WM_APP_PSF_DONE:      delete reinterpret_cast<PsfResult*>(msg.lParam);    break;
             case WM_APP_ANALYSIS_DONE: delete reinterpret_cast<LoadAnalysis*>(msg.lParam); break;
+            case WM_APP_EXPORT_DONE:   delete reinterpret_cast<wsx::ExportOutcome*>(msg.lParam); break;
         }
     }
 }
@@ -832,6 +860,92 @@ void ViewerWindow::worker_main() {
             } catch (...) { /* drop this render tick rather than crash */ }
         }
     }
+}
+
+// Export worker. A plain FIFO: every job the user asked for runs, in order,
+// and none is dropped because a newer one arrived or because the user moved to
+// another file. Writing a file the user explicitly requested is not something
+// to discard as stale.
+void ViewerWindow::export_main() {
+    // Declared outside the loop so it also covers the early return on quit.
+    // MULTITHREADED, and RPC_E_CHANGED_MODE is accepted: this thread owns its
+    // apartment, and WIC is created and released entirely inside it.
+    wsx::ComApartment com;
+
+    for (;;) {
+        wsx::ExportRequest job;
+        {
+            std::unique_lock<std::mutex> lk(worker_mtx_);
+            export_cv_.wait(lk, [this] { return worker_quit_ || !export_queue_.empty(); });
+            if (worker_quit_) return;      // remaining queue is dropped deliberately
+            job = std::move(export_queue_.front());
+            export_queue_.pop_front();
+        }
+
+        auto out = std::make_unique<wsx::ExportOutcome>();
+        out->token = job.token;
+        out->dest_path = job.dest_path;
+
+        if (!com.ok()) {
+            out->error = L"Windows imaging (COM) could not be initialised.";
+        } else {
+            // An exception escaping a thread function terminates the process,
+            // which is why every worker here is wrapped the same way.
+            try {
+                *out = wsx::run_export(job, [this] {
+                    std::lock_guard<std::mutex> lk(worker_mtx_);
+                    return worker_quit_;
+                });
+            } catch (...) {
+                out->success = false;
+                out->error = L"Internal error during export.";
+            }
+        }
+        out->token = job.token;
+        out->dest_path = job.dest_path;
+
+        if (!::PostMessageW(hwnd_, WM_APP_EXPORT_DONE, 0,
+                            reinterpret_cast<LPARAM>(out.get())))
+            continue;                       // window gone; unique_ptr frees it
+        out.release();                      // the UI thread owns it now
+    }
+}
+
+void ViewerWindow::submit_export(wsx::ExportRequest job) {
+    job.token = ++export_token_next_;
+    job.app_version = FITS_VERSION_STR;
+    {
+        std::lock_guard<std::mutex> lk(worker_mtx_);
+        export_queue_.push_back(std::move(job));
+    }
+    export_cv_.notify_one();
+    ++exporting_;
+    export_status_ = L"Exporting…";
+    update_title();
+}
+
+void ViewerWindow::on_export_finished(wsx::ExportOutcome* raw) {
+    std::unique_ptr<wsx::ExportOutcome> out(raw);
+    if (exporting_ > 0) --exporting_;
+
+    if (!out) { export_status_.clear(); update_title(); return; }
+
+    if (out->cancelled) {
+        export_status_.clear();
+    } else if (out->success) {
+        const size_t slash = out->dest_path.find_last_of(L"\\/");
+        const std::wstring name = (slash == std::wstring::npos)
+                                ? out->dest_path : out->dest_path.substr(slash + 1);
+        export_status_ = L"Exported " + name;
+    } else {
+        export_status_.clear();
+        ::MessageBoxW(hwnd_,
+                      out->error.empty() ? L"The export failed." : out->error.c_str(),
+                      L"WinStellar — Export", MB_OK | MB_ICONERROR);
+    }
+    if (exporting_ > 0) export_status_ = L"Exporting…";
+    update_title();
+    toolbar_.set_enabled(kCmd_Export, image_ && !image_->empty() && exporting_ == 0);
 }
 
 void ViewerWindow::inspect_worker_main() {
@@ -1148,6 +1262,7 @@ void ViewerWindow::on_load_finished(std::uint64_t gen, LoadResult* raw) {
     update_title();
     invalidate_viewport();
     toolbar_.set_nav_enabled(true);
+    toolbar_.set_enabled(kCmd_Export, exporting_ == 0);
 }
 
 void ViewerWindow::on_load_analysis_finished(std::uint64_t gen, LoadAnalysis* raw) {
@@ -1550,6 +1665,16 @@ void ViewerWindow::on_command(int id) {
         case kCmd_Inspect:
             show_inspect_menu();
             break;
+        case kCmd_Export:
+            show_export_menu();
+            break;
+        case kCmd_ExportJpg:
+        case kCmd_ExportPng:
+        case kCmd_ExportTif:
+        case kCmd_ExportFits:
+            start_export(id);
+            ::SetFocus(hwnd_);
+            break;
         case kCmd_InspectStars:
             show_stars_ = !show_stars_;
             if (show_stars_) ensure_detailed();
@@ -1589,6 +1714,189 @@ void ViewerWindow::on_command(int id) {
             break;
         }
     }
+}
+
+namespace {
+
+struct ExportFormatSpec {
+    int          cmd;
+    wsx::Format  format;
+    const wchar_t* menu;       // menu entry, says which data it writes
+    const wchar_t* label;      // save-dialog filter label
+    const wchar_t* pattern;
+    const wchar_t* ext;
+};
+
+// The two data paths are stated in the menu itself: a user should not have to
+// read documentation to know that a TIFF holds different numbers from a PNG.
+constexpr ExportFormatSpec kExportFormats[] = {
+    { kCmd_ExportJpg,  wsx::Format::Jpeg, L"JPEG — as displayed (stretched)",
+      L"JPEG image",  L"*.jpg;*.jpeg", L"jpg"  },
+    { kCmd_ExportPng,  wsx::Format::Png,  L"PNG — as displayed (stretched)",
+      L"PNG image",   L"*.png",        L"png"  },
+    { kCmd_ExportTif,  wsx::Format::Tiff, L"TIFF — linear 16-bit (unstretched)",
+      L"TIFF image",  L"*.tif;*.tiff", L"tif"  },
+    { kCmd_ExportFits, wsx::Format::Fits, L"FITS — original data (unstretched)",
+      L"FITS image",  L"*.fits;*.fit", L"fits" },
+};
+
+const ExportFormatSpec* export_spec_for(int cmd) {
+    for (const auto& s : kExportFormats) if (s.cmd == cmd) return &s;
+    return nullptr;
+}
+
+// Last-used export folder and format live next to the window placement.
+std::wstring read_last_export_dir() {
+    HKEY k = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, KEY_READ, &k) != ERROR_SUCCESS)
+        return {};
+    wchar_t buf[MAX_PATH] = {};
+    DWORD cb = sizeof(buf), type = 0;
+    const LSTATUS rc = ::RegQueryValueExW(k, L"ExportDir", nullptr, &type,
+                                          reinterpret_cast<BYTE*>(buf), &cb);
+    ::RegCloseKey(k);
+    if (rc != ERROR_SUCCESS || type != REG_SZ) return {};
+    return std::wstring(buf);
+}
+
+void write_last_export_dir(const std::wstring& dir) {
+    if (dir.empty()) return;
+    HKEY k = nullptr;
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, nullptr,
+                          REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr,
+                          &k, nullptr) != ERROR_SUCCESS) return;
+    ::RegSetValueExW(k, L"ExportDir", 0, REG_SZ,
+                     reinterpret_cast<const BYTE*>(dir.c_str()),
+                     static_cast<DWORD>((dir.size() + 1) * sizeof(wchar_t)));
+    ::RegCloseKey(k);
+}
+
+}  // namespace
+
+void ViewerWindow::show_export_menu() {
+    HMENU menu = ::CreatePopupMenu();
+    if (!menu) return;
+
+    const bool have = (image_ && !image_->empty());
+    for (const auto& s : kExportFormats) {
+        UINT flags = MF_STRING;
+        if (!have) flags |= MF_GRAYED;
+        ::AppendMenuW(menu, flags, static_cast<UINT_PTR>(s.cmd), s.menu);
+        if (s.cmd == kCmd_ExportPng)
+            ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
+
+    POINT pt{};
+    HWND tb = toolbar_.hwnd();
+    RECT br{};
+    if (tb && ::SendMessageW(tb, TB_GETRECT, kCmd_Export, reinterpret_cast<LPARAM>(&br))) {
+        pt.x = br.left;
+        pt.y = br.bottom;
+        ::ClientToScreen(tb, &pt);
+    } else {
+        ::GetCursorPos(&pt);
+    }
+    ::TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+                     pt.x, pt.y, 0, hwnd_, nullptr);
+    ::DestroyMenu(menu);
+    ::SetFocus(hwnd_);
+}
+
+void ViewerWindow::start_export(int cmd) {
+    const ExportFormatSpec* spec = export_spec_for(cmd);
+    if (!spec || !image_ || image_->empty()) return;
+
+    // Default name: the source name with the new extension.
+    std::wstring stem = L"export";
+    if (!loaded_path_.empty()) {
+        const size_t slash = loaded_path_.find_last_of(L"\\/");
+        stem = (slash == std::wstring::npos) ? loaded_path_ : loaded_path_.substr(slash + 1);
+        const size_t dot = stem.find_last_of(L'.');
+        if (dot != std::wstring::npos) stem.erase(dot);
+    }
+
+    // A FITS export wants the ORIGINAL mosaic, which is not in memory: the
+    // loader frees the CFA buffer right after demosaicing. Ask BEFORE the save
+    // dialog, so the one question comes first and the user is not surprised
+    // after choosing a filename.
+    bool allow_memory_fallback = false;
+    if (spec->format == wsx::Format::Fits) {
+        const fitsx::FitsSourceStatus st =
+            fitsx::probe_fits_source(loaded_path_, image_->width, image_->height,
+                                     rotation_deg_);
+        if (st != fitsx::FitsSourceStatus::Usable) {
+            const wchar_t* why = L"The original file cannot be re-read.";
+            switch (st) {
+                case fitsx::FitsSourceStatus::NotFits:
+                    why = L"This image did not come from a FITS file, so there is no "
+                          L"original FITS to copy."; break;
+                case fitsx::FitsSourceStatus::Missing:
+                    why = L"The original file has been moved, renamed or deleted since "
+                          L"it was opened."; break;
+                case fitsx::FitsSourceStatus::Changed:
+                    why = L"The original file on disk no longer matches the image on "
+                          L"screen."; break;
+                case fitsx::FitsSourceStatus::CompressedOrCube:
+                    why = L"The original file is compressed or has an unsupported "
+                          L"structure."; break;
+                case fitsx::FitsSourceStatus::UnrotatableCfa:
+                    why = L"The colour filter pattern of the original cannot be rotated "
+                          L"safely."; break;
+                case fitsx::FitsSourceStatus::UnrotatableRowOrder:
+                    why = L"The original declares a row order this rotation cannot "
+                          L"preserve."; break;
+                default: break;
+            }
+            std::wstring msg = why;
+            msg += L"\n\nWinStellar can still write a FITS from the image in memory, but "
+                   L"for a one-shot-colour frame that image has already been debayered "
+                   L"and white balanced — it is not the raw sensor mosaic.\n\n"
+                   L"Export the processed image anyway?";
+            if (::MessageBoxW(hwnd_, msg.c_str(), L"WinStellar — Export FITS",
+                              MB_YESNO | MB_ICONWARNING) != IDYES)
+                return;
+            allow_memory_fallback = true;
+        }
+    }
+
+    std::wstring initial_name = stem + L'.' + spec->ext;
+    wchar_t buf[MAX_PATH] = {};
+    ::wcsncpy_s(buf, initial_name.c_str(), _TRUNCATE);
+
+    std::wstring filter;
+    filter.append(spec->label);   filter.push_back(L'\0');
+    filter.append(spec->pattern); filter.push_back(L'\0');
+    filter.append(L"All files");  filter.push_back(L'\0');
+    filter.append(L"*.*");        filter.push_back(L'\0');
+    filter.push_back(L'\0');
+
+    const std::wstring last_dir = read_last_export_dir();
+
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = filter.c_str();
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = spec->ext;
+    if (!last_dir.empty()) ofn.lpstrInitialDir = last_dir.c_str();
+    // OFN_OVERWRITEPROMPT: the user is asked before an existing file is replaced.
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    if (!::GetSaveFileNameW(&ofn)) return;
+
+    const std::wstring dest = buf;
+    const size_t slash = dest.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) write_last_export_dir(dest.substr(0, slash));
+
+    wsx::ExportRequest job;
+    job.format = spec->format;
+    job.dest_path = dest;
+    job.source_path = loaded_path_;
+    job.image = image_;                 // shared_ptr copy: survives navigation
+    job.stretch = stretch_;
+    job.display_rotation_deg = rotation_deg_;
+    job.allow_memory_fits_fallback = allow_memory_fallback;
+    submit_export(std::move(job));
 }
 
 void ViewerWindow::show_inspect_menu() {

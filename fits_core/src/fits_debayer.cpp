@@ -1,5 +1,7 @@
 #include "fits_core/fits_debayer.h"
 
+#include "fits_core/image_rotate.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -79,6 +81,51 @@ BayerPattern detect_bayer_pattern(const FitsImage& img, int& xoff, int& yoff) no
     if (img.find_header_int("YBAYROFF", v) || img.find_header_int("BAYOFFY", v))
         yoff = static_cast<int>(((v % 2) + 2) % 2);
     return p;
+}
+
+const char* bayer_pattern_name(BayerPattern p) noexcept {
+    switch (p) {
+        case BayerPattern::RGGB: return "RGGB";
+        case BayerPattern::BGGR: return "BGGR";
+        case BayerPattern::GRBG: return "GRBG";
+        case BayerPattern::GBRG: return "GBRG";
+        default:                 return "";
+    }
+}
+
+BayerPattern rotate_bayer_pattern(BayerPattern src, int xoff, int yoff,
+                                  int w, int h, int display_rotation_deg) noexcept {
+    if (src == BayerPattern::None || w <= 0 || h <= 0) return BayerPattern::None;
+
+    // The mosaic lives in the stored (bottom-up) array, so the display rotation
+    // has to be conjugated the same way the pixel data is.
+    const RotMap m = make_rot_map(w, h, array_rotation_for_display(display_rotation_deg));
+
+    const Tile tile = tile_for(src);
+    const int ox = ((xoff % 2) + 2) % 2;
+    const int oy = ((yoff % 2) + 2) % 2;
+
+    // Sample the colour that lands at each of the four output tile positions.
+    // The lookup expression is the same one debayer_bilinear uses, so the
+    // offset semantics cannot drift apart from the loader's.
+    int out[2][2];
+    for (int i = 0; i < 2; ++i) {          // output row
+        for (int j = 0; j < 2; ++j) {      // output column
+            const std::size_t idx = m.src(j, i);
+            const int sr = static_cast<int>(idx / static_cast<std::size_t>(w));
+            const int sc = static_cast<int>(idx % static_cast<std::size_t>(w));
+            out[i][j] = tile.c[(sr + oy) & 1][(sc + ox) & 1];
+        }
+    }
+
+    for (BayerPattern cand : { BayerPattern::RGGB, BayerPattern::BGGR,
+                               BayerPattern::GRBG, BayerPattern::GBRG }) {
+        const Tile t = tile_for(cand);
+        if (t.c[0][0] == out[0][0] && t.c[0][1] == out[0][1] &&
+            t.c[1][0] == out[1][0] && t.c[1][1] == out[1][1])
+            return cand;
+    }
+    return BayerPattern::None;   // unreachable for a valid 2x2 Bayer tile
 }
 
 void debayer_bilinear(const std::vector<float>& cfa, int w, int h,

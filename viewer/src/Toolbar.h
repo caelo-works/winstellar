@@ -32,6 +32,8 @@ public:
     void set_histogram_active(bool on);
     // Greys out Prev/Next when no file is loaded.
     void set_nav_enabled(bool enabled);
+    // Enable/disable a single button by its kCmd_* id.
+    void set_enabled(int cmd_id, bool enabled);
 
 private:
     HWND  hwnd_       = nullptr;

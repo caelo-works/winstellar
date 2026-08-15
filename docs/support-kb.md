@@ -275,6 +275,9 @@ PgDn). This is the fastest way to flip through a night's subs.
 The tooltips are the exact labels the user sees:
 
 - **Open… (Ctrl+O)**
+- **Export image (Ctrl+S)** — the floppy-disk button, second from the left.
+  From the release after 0.7.0 only; opens the format menu (see the Export
+  section).
 - **Previous image (← / PgUp)** · **Next image (→ / PgDn)**
 - **Fit to window (F)** · **Actual size (1)** (the `1:1` button)
 - **Zoom out (-)** · **Zoom in (+)**
@@ -289,8 +292,9 @@ The tooltips are the exact labels the user sees:
 - **Show / hide measurements (A)**
 - **Show / hide FITS headers (H)**
 
-**The stretch is a display setting only. WinStellar never modifies the user's
-file** — it has no save and no export in 0.7.0.
+**The stretch is a display setting only: WinStellar never modifies the file it
+opened.** From the release after 0.7.0 it can WRITE a new file — see the Export
+section — but it always writes a new one and never touches the original.
 
 ### Keyboard shortcuts, complete list
 
@@ -302,6 +306,7 @@ file** — it has no save and no export in 0.7.0.
 - **A** — show / hide the measurements panel
 - **H** — show / hide the FITS headers panel
 - **Ctrl+H** — show / hide the histogram window
+- **Ctrl+S** — export the image (from the release after 0.7.0 only)
 
 Dragging with the left mouse button **pans** the image.
 
@@ -316,7 +321,7 @@ Dragging with the left mouse button **pans** the image.
 - **Histogram window (Ctrl+H)** — a log-scaled histogram with **three draggable
   handles** (shadows, midtone, highlights) that reshape the stretch live, plus an
   **Auto** button (back to the automatic stretch) and a **RAW** button (back to
-  linear). Again: display only, the file is never written to.
+  linear). Again: display only — the opened file is never written to.
 
 ---
 
@@ -371,6 +376,47 @@ pour la carte de fond.`** on 0.6.10 and earlier), the frame is **smaller than 80
 pixels on its short side**. The map is computed on a 48 × 72 cell grid and a small image has too few
 pixels per cell to be meaningful. This is a hard limit, not a bug, and there is
 no setting to lower it.
+
+---
+
+## Exporting an image — JPG, PNG, TIFF, FITS
+
+**Not available in 0.7.0.** From the release after 0.7.0, the toolbar has an
+**Export** button (**Ctrl+S**) that opens a menu of four formats. **The original
+file is never modified** — export always writes a new file, where the user chooses.
+
+**The four formats are not interchangeable, and the menu says so.** Two of them
+write what is on screen; two write the data underneath it:
+
+- **JPEG — as displayed (stretched)** — the image exactly as shown, stretch
+  applied, 8 bits per channel. For sharing.
+- **PNG — as displayed (stretched)** — the same pixels, losslessly compressed.
+- **TIFF — linear 16-bit (unstretched)** — the **linear** data, no stretch, 16
+  bits per channel. For taking into another editor.
+- **FITS — original data (unstretched)** — the original frame: original bit depth,
+  original headers, and for one-shot-colour the **raw CFA mosaic**, not the
+  debayered image. For putting back into a stacker.
+
+**The rotation the user applied (R / Shift+R) is written into all four.**
+
+**If a user says the TIFF "looks black"**, that is correct and expected: it is
+linear data, exactly like the **RAW** button in the viewer. They want JPEG or PNG
+if they want it to look like the screen.
+
+**Exporting to FITS may ask a question first.** The exported FITS is re-read from
+the original file so it carries the true mosaic and headers. When that is
+impossible — the image came from a camera RAW or an XISF rather than a FITS, or
+the original was moved, renamed or deleted since it was opened — WinStellar asks
+whether to export the processed image instead. Answering yes produces a valid
+FITS, but for a colour frame it holds the **debayered and white-balanced** image,
+not the raw mosaic; the file records this in its HISTORY. Answering no cancels.
+
+**An unrotated FITS export of a FITS file is a byte-for-byte copy** of the
+original. That is intentional: nothing is more faithful than the original bytes.
+
+**A failed export never leaves a damaged file.** Everything is written to a
+temporary file next to the destination and moved into place only once it is
+complete, so an interrupted export leaves the previous file untouched.
 
 ---
 
@@ -622,10 +668,16 @@ not their install. **Fixed in 0.7.0.** *« Carte du fond »* = background
 map, *« Courbure »* = curvature, *« Visuel »* = visual, *« Inspecté »* =
 inspected, *« Analyse PSF… »* = computing the PSF.
 
-**"Can I save / export the stretched image as JPG or PNG?"**
-**No — not in 0.7.0.** The viewer is read-only: it never modifies or writes an
-image file. Export is a requested feature, not a hidden one. Do not send the user
-looking for a menu that does not exist.
+**"Can I save / export the image?"**
+**Not in 0.7.0** — that version has no export at all. **From the release after
+0.7.0**, the toolbar has an **Export** button (**Ctrl+S**) offering four formats,
+and which one they want depends on what they are doing:
+- **JPEG** and **PNG** — what is on screen, with the stretch applied. For sharing
+  and posting.
+- **TIFF** — 16-bit **linear** data, unstretched. For taking into another editor.
+- **FITS** — the **original data**, unstretched, keeping the original headers and,
+  for one-shot-colour, the raw CFA mosaic. For putting back into a stacker.
+The rotation applies to all four. The original file is never modified.
 
 **"Explorer is slow when I scroll a folder of frames."**
 It should not be from 0.6.10 onward — that release specifically fixed scroll
@@ -659,8 +711,9 @@ can. A folder of `.raf` fills in several times slower than the same folder of
 - anything about payment or licensing beyond *"it is free and GPL-3.0"*.
 
 **Never tell a user to delete, move or overwrite an image file** to fix a
-WinStellar problem. No WinStellar issue is ever fixed by touching their frames —
-the application never writes to them.
+WinStellar problem. No WinStellar issue is ever fixed by touching their frames.
+WinStellar only ever writes a file the user explicitly asked for through Export,
+to a destination they chose; it never modifies the frame it opened.
 
 **Collect these before escalating.** Without them the report is not actionable:
 

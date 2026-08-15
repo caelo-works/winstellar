@@ -130,4 +130,44 @@ SynthFits make_star_field(int width, int height, int n_stars,
     return s;
 }
 
+
+std::string write_synth_fits_u16(const std::string& path, int width, int height,
+                                 const std::vector<uint16_t>& pixels,
+                                 const std::vector<std::pair<std::string, std::string>>& string_keys,
+                                 const std::vector<std::pair<std::string, double>>& real_keys) {
+    if (width <= 0 || height <= 0) return {};
+    if (static_cast<size_t>(width) * height != pixels.size()) return {};
+
+    fitsfile* fp = nullptr;
+    int status = 0;
+    const std::string create_path = "!" + path;
+    if (fits_create_file(&fp, create_path.c_str(), &status) != 0) return {};
+
+    long naxes[2] = { width, height };
+    // USHORT_IMG is BITPIX=16 with BZERO=32768 -- what cameras actually write.
+    if (fits_create_img(fp, USHORT_IMG, 2, naxes, &status) != 0) {
+        fits_close_file(fp, &status);
+        return {};
+    }
+
+    long fpixel[2] = { 1, 1 };
+    std::vector<uint16_t> copy = pixels;
+    if (fits_write_pix(fp, TUSHORT, fpixel, static_cast<long>(copy.size()),
+                       copy.data(), &status) != 0) {
+        fits_close_file(fp, &status);
+        return {};
+    }
+
+    for (const auto& kv : string_keys)
+        fits_update_key(fp, TSTRING, const_cast<char*>(kv.first.c_str()),
+                        const_cast<char*>(kv.second.c_str()), nullptr, &status);
+    for (auto kv : real_keys)
+        fits_update_key(fp, TDOUBLE, const_cast<char*>(kv.first.c_str()),
+                        &kv.second, nullptr, &status);
+
+    fits_write_chksum(fp, &status);
+    fits_close_file(fp, &status);
+    return (status == 0) ? path : std::string{};
+}
+
 }  // namespace wst

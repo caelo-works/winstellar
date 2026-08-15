@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,6 +23,7 @@
 #include "Toolbar.h"
 #include "Histogram.h"
 #include "AberrationView.h"
+#include "ImageExport.h"
 #include "TiltView.h"
 #include "BackgroundView.h"
 
@@ -74,6 +76,10 @@ private:
     // Inspection tools. The toolbar's Inspect button pops this menu; toggling
     // any overlay lazily kicks a detailed (per-star) analysis on the worker.
     void show_inspect_menu();
+    // Export: the toolbar button opens the format menu; start_export runs the
+    // save dialog for one format and queues the job.
+    void show_export_menu();
+    void start_export(int cmd);
     void ensure_detailed();           // request detailed analysis if not ready
     void refresh_tilt_window();       // push the current tilt result if open
     void push_aberration();           // push frame (+stars) to the inspector if open
@@ -215,6 +221,24 @@ private:
     // Shares worker_mtx_ + worker_quit_ with the primary worker.
     std::thread             inspect_thread_;
     std::condition_variable inspect_cv_;
+
+    // Third worker: export. Deliberately not one of the latest-wins pending_*
+    // slots on the other two. Those drop the older job, and the primary worker
+    // prioritises loads over renders, so a 700 MB write would stall every
+    // interactive re-stretch and vice versa. Export is also the one job that
+    // must never be discarded as stale: pressing Next mid-export must not
+    // cancel the file the user asked for. Hence a real FIFO, off the
+    // generation protocol. Shares worker_mtx_ + worker_quit_.
+    std::thread                   export_thread_;
+    std::condition_variable       export_cv_;
+    std::deque<wsx::ExportRequest> export_queue_;
+    int                           exporting_ = 0;           // UI thread only
+    std::uint64_t                 export_token_next_ = 0;
+    std::wstring                  export_status_;           // title-bar suffix
+
+    void export_main();
+    void submit_export(wsx::ExportRequest job);             // UI thread
+    void on_export_finished(wsx::ExportOutcome* out);
 
     // load slot
     bool                                       pending_load_       = false;

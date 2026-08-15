@@ -8,6 +8,7 @@ add_executable(WinStellar WIN32
     src/AberrationView.cpp
     src/TiltView.cpp
     src/BackgroundView.cpp
+    src/ImageExport.cpp
     src/viewer.rc
 )
 

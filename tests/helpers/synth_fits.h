@@ -44,4 +44,13 @@ std::string write_synth_fits_rgb_cube(const std::string& path,
                                       const std::vector<float>& g,
                                       const std::vector<float>& b);
 
+// Write an unsigned-16 FITS (BITPIX=16 + BZERO=32768), the shape a real camera
+// produces. `pixels` is row-major in FITS order (row 0 = bottom). Keyword values
+// are written with their natural type so a round trip can check type fidelity.
+// Returns the path written, or empty on failure.
+std::string write_synth_fits_u16(const std::string& path, int width, int height,
+                                 const std::vector<uint16_t>& pixels,
+                                 const std::vector<std::pair<std::string, std::string>>& string_keys,
+                                 const std::vector<std::pair<std::string, double>>& real_keys);
+
 }  // namespace wst
