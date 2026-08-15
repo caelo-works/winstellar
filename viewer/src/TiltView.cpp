@@ -134,7 +134,7 @@ void TiltWindow::render() {
     // Header: tilt + curvature.
     if (head_) {
         wchar_t h[96];
-        const int n = swprintf_s(h, L"Tilt %.1f %%      Courbure %.1f %%",
+        const int n = swprintf_s(h, L"Tilt %.1f %%      Curvature %.1f %%",
                                  tilt_.tilt_pct, tilt_.curvature_pct);
         brush_->SetColor(kText);
         if (n > 0) rt_->DrawTextW(h, static_cast<UINT32>(n), head_,
@@ -232,7 +232,8 @@ void TiltWindow::render() {
     // Footer legend.
     if (text_) {
         brush_->SetColor(D2D1::ColorF(0x8b93a0)); brush_->SetOpacity(1.0f);
-        rt_->DrawTextW(L"HFR (px) · vert = net  rouge = mou", 31, text_,
+        static constexpr wchar_t kLegend[] = L"HFR (px) · green = sharp  red = soft";
+        rt_->DrawTextW(kLegend, ARRAYSIZE(kLegend) - 1, text_,
                        D2D1::RectF(10, H - 24, W - 10, H - 6), brush_);
     }
     brush_->SetOpacity(1.0f);

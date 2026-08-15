@@ -13,12 +13,13 @@ them for one of these:
   Details → File version** — this one also carries the git commit and the build
   date.
 
-**The interface is in English, but a few labels in the inspection windows are
-still in French** — *« Carte du fond »*, *« Visuel »*, *« Inspecté »*,
-*« Courbure »*, *« Analyse PSF… »*. **There is no language setting**: every user
-sees the same mixed interface, whatever their Windows language. So a user quoting
-a French label is not on a "French version", and an English user quoting *« Carte
-du fond »* is not confused. Both spellings are given in this document.
+**The interface is in English. On 0.6.10 a few labels in the inspection windows
+are still in French** — *« Carte du fond »*, *« Visuel »*, *« Inspecté »*,
+*« Courbure »*, *« Analyse PSF… »*. **They are English from the next release
+onward.** There is no language setting and never was: on 0.6.10 every user sees
+the same mixed interface, whatever their Windows language. So a user quoting a
+French label is not on a "French version" — they are on 0.6.10. Both wordings are
+given throughout this document; quote the one matching their version.
 
 **Never invent a figure, a path, a menu name, a supported format or a
 compatibility claim.** If the answer is not in this document, the correct answer
@@ -318,9 +319,9 @@ are drawn on the frame itself.
 ### Tilt diagram…
 
 A small **Tilt** window showing HFR across the field as a deformed square, with
-the header **`Tilt xx.x %      Courbure xx.x %`** (*« Courbure »* is French for
-*curvature* — see the preamble; there is no English version of this label). The
-legend reads **`HFR (px) · vert = net  rouge = mou`** — green = sharp, red = soft.
+the header **`Tilt xx.x %      Curvature xx.x %`** (**`Courbure`**, French for
+*curvature*, on 0.6.10 — see the preamble). The legend reads **`HFR (px) · green =
+sharp  red = soft`**, and **`HFR (px) · vert = net  rouge = mou`** on 0.6.10.
 
 **If it says `No stars analysed`**, no star was detected in the frame. A tilt
 diagram cannot be built without stars: a dark, a flat, a heavily defocused frame
@@ -333,23 +334,24 @@ so coma, astigmatism and tilt show up as distorted star shapes away from the
 centre. Its toolbar has four buttons:
 
 - **3×3** / **5×5** — the sampling grid.
-- **Visuel** (*visual*) — the actual pixels at each grid position.
-- **Inspecté** (*inspected*) — the synthesised PSF model, annotated with
-  eccentricity, concentration and the dominant axis (**ref**, **radial**,
+- **Visual** (**Visuel** on 0.6.10) — the actual pixels at each grid position.
+- **Inspected** (**Inspecté** on 0.6.10) — the synthesised PSF model, annotated
+  with eccentricity, concentration and the dominant axis (**ref**, **radial**,
   **tang.**, **oblique**).
 
-**`Analyse PSF…`** displayed in the window means it is **computing**, not that it
-failed. It runs on a background thread and the window fills in when it is done.
+**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10) displayed in the window means
+it is **computing**, not that it failed. It runs on a background thread and the
+window fills in when it is done.
 
 ### Background map…
 
-A **Carte du fond** (*background map*) window — an illumination / sky-background
-map that reveals vignetting, gradients and amp glow. The readout line gives the
-radial drop, the gradient and its direction, the azimuthal anisotropy and the
-corner glow.
+A **Background map** window (titled **Carte du fond** on 0.6.10) — an illumination
+/ sky-background map that reveals vignetting, gradients and amp glow. The readout
+line gives the radial drop, the gradient and its direction, the azimuthal
+anisotropy and the corner glow.
 
-**If it says `Image trop petite pour la carte de fond.`** (*"image too small for
-the background map"*), the frame is **smaller than 800 pixels on its short
+**If it says `Image too small for the background map.`** (**`Image trop petite
+pour la carte de fond.`** on 0.6.10), the frame is **smaller than 800 pixels on its short
 side**. The map is computed on a 48 × 72 cell grid and a small image has too few
 pixels per cell to be meaningful. This is a hard limit, not a bug, and there is
 no setting to lower it.
@@ -435,10 +437,11 @@ frame or a badly defocused one.
 **`No stars analysed`** in the Tilt window.
 Same cause: the tilt diagram needs detected stars. Not a bug.
 
-**`Image trop petite pour la carte de fond.`** in the background map window.
+**`Image too small for the background map.`** in the background map window —
+**`Image trop petite pour la carte de fond.`** on 0.6.10.
 The image is smaller than **800 pixels on its short side**. Hard limit.
 
-**`Analyse PSF…`** in the Aberration Inspector.
+**`Analysing PSF…`** (**`Analyse PSF…`** on 0.6.10) in the Aberration Inspector.
 **Not an error** — it means the PSF plate is being computed. Wait for it.
 
 ### In the Explorer preview pane
@@ -492,14 +495,15 @@ thumbnail and won't open."
 reads DNG. Escalate the request — this is a real gap, and if the user is quoting
 documentation that claims those formats work, that documentation is wrong.
 
-### Parts of the inspection windows are in French
+### Parts of the inspection windows are in French (0.6.10 only)
 
-The Tilt, Aberration and Background windows show a handful of French labels —
-*« Courbure »*, *« Visuel »*, *« Inspecté »*, *« Analyse PSF… »*, *« Carte du
-fond »*, *« Image trop petite pour la carte de fond. »*. **Every user sees them,
-in every language**; there is no language setting and no "English version" to
-switch to. It is a known cosmetic inconsistency. Confirm it, translate the label
-for the user, and move on.
+On **0.6.10** the Tilt, Aberration and Background windows show a handful of French
+labels — *« Courbure »*, *« Visuel »*, *« Inspecté »*, *« Analyse PSF… »*,
+*« Carte du fond »*, *« Image trop petite pour la carte de fond. »*. **Every user
+on that version sees them, in every language**; there is no language setting and
+no "English version" to switch to, so it is not something they can fix. **The
+labels are English from the next release onward.** On 0.6.10: confirm it, say it
+is cosmetic and already fixed for the next release, translate the label, move on.
 
 ### Windows warns that the publisher is unknown
 
@@ -516,8 +520,9 @@ is a known missing feature, not a broken one.
 
 ### The background map needs an image at least 800 px on its short side
 
-Anything smaller shows *« Image trop petite pour la carte de fond. »*. There is no
-setting to lower the threshold.
+Anything smaller shows **`Image too small for the background map.`** (*« Image trop
+petite pour la carte de fond. »* on 0.6.10). There is no setting to lower the
+threshold.
 
 ### Tilt and aberration need detected stars
 
@@ -576,7 +581,8 @@ No stars were detected in that frame. Normal on darks, biases, flats, clouded or
 badly defocused frames. Both tools need stars.
 
 **"Half the inspection window is in French."**
-Known cosmetic issue, and every user sees it. *« Carte du fond »* = background
+Known cosmetic issue on **0.6.10**; every user on it sees it, it is not their
+install. **Fixed from the next release onward.** *« Carte du fond »* = background
 map, *« Courbure »* = curvature, *« Visuel »* = visual, *« Inspecté »* =
 inspected, *« Analyse PSF… »* = computing the PSF.
 

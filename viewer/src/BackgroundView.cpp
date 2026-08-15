@@ -65,7 +65,7 @@ bool BackgroundWindow::create(HWND owner, HINSTANCE hinst) {
     const int x = (owner ? or_rc.right - 520 : CW_USEDEFAULT);
     const int y = (owner ? or_rc.top + 110 : CW_USEDEFAULT);
 
-    hwnd_ = ::CreateWindowExW(WS_EX_TOOLWINDOW, kClassName, L"Carte du fond",
+    hwnd_ = ::CreateWindowExW(WS_EX_TOOLWINDOW, kClassName, L"Background map",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX,
         x, y, 480, 380, owner, nullptr, hinst, this);
     if (!hwnd_) return false;
@@ -160,14 +160,16 @@ void BackgroundWindow::render() {
 
     if (text_) {
         brush_->SetColor(kText);
-        rt_->DrawTextW(L"Carte du fond / illumination", 28, text_,
+        static constexpr wchar_t kHead[] = L"Background / illumination map";
+        rt_->DrawTextW(kHead, ARRAYSIZE(kHead) - 1, text_,
                        D2D1::RectF(12, 7, W - 8, kHdr), brush_);
     }
 
     if (map_.skipped) {
         if (text_) {
             brush_->SetColor(D2D1::ColorF(0x8b93a0));
-            rt_->DrawTextW(L"Image trop petite pour la carte de fond.", 39, text_,
+            static constexpr wchar_t kTooSmall[] = L"Image too small for the background map.";
+            rt_->DrawTextW(kTooSmall, ARRAYSIZE(kTooSmall) - 1, text_,
                 D2D1::RectF(12, H * 0.5f - 10, W - 8, H * 0.5f + 12), brush_);
         }
         if (rt_->EndDraw() == D2DERR_RECREATE_TARGET) release_d2d();

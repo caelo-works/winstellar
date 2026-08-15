@@ -15,13 +15,13 @@
 
 // Modeless top-level popup: the "Aberration Inspector". A dark toolbar (same
 // look as the main window) toggles the grid (3x3 / 5x5) and the mode:
-//   * Visuel   -- 100 % crops the user eyeballs (from the rendered frame).
-//   * Inspecté -- a measured PSF plate: per zone, the best stars are detected
+//   * Visual    -- 100 % crops the user eyeballs (from the rendered frame).
+//   * Inspected -- a measured PSF plate: per zone, the best stars are detected
 //     and measured with adaptive weighted moments (on the LINEAR image), and a
 //     2.5-sigma ellipse + centroid is drawn over each.
 //
 // Owner = the main viewer window. The viewer pushes the rendered frame
-// (set_source, for Visuel) and the linear image (set_image, for Inspecté).
+// (set_source, for Visual) and the linear image (set_image, for Inspected).
 class AberrationWindow {
 public:
     enum class Mode { Visual, Inspected };
@@ -45,7 +45,7 @@ public:
     // what's on screen. Marks the plate dirty; the next set_image rebuilds it.
     void set_rotation(int deg);
 
-    // Linear image (for Inspecté). Only stores it -- the PSF plate is computed
+    // Linear image (for Inspected). Only stores it -- the PSF plate is computed
     // off the UI thread by the viewer and handed back via set_plate().
     void set_image(std::shared_ptr<const fitsx::FitsImage> img);
     // True when the current image (Inspected mode) has no valid cached plate;
@@ -53,7 +53,7 @@ public:
     bool needs_plate() const;
     // Hand back a PSF plate the viewer computed for the current image at grid g.
     void set_plate(fitsx::PsfPlate plate, int g);
-    // Rendered frame (for Visuel).
+    // Rendered frame (for Visual).
     void set_source(const fitsx::RenderedBitmap& rb);
     void clear();
 
@@ -75,17 +75,17 @@ private:
     void create_toolbar();
     LRESULT on_bar_customdraw(LPNMTBCUSTOMDRAW nm) const;
 
-    void build_visual(const fitsx::RenderedBitmap& rb);  // (re)extract Visuel crops
+    void build_visual(const fitsx::RenderedBitmap& rb);  // (re)extract Visual crops
     void rebuild_inspected_display(); // rebuild rotated display zones from plate_
 
     static constexpr int kBarH = 40;
 
-    // Visuel: one 100 % crop per cell.
+    // Visual: one 100 % crop per cell.
     struct Crop {
         int w = 0, h = 0;
         std::vector<uint8_t> bgra;
     };
-    // Inspecté: a measured star ready for display (stamp already rotated to the
+    // Inspected: a measured star ready for display (stamp already rotated to the
     // displayed orientation, centroid/PA adjusted to match).
     struct DispStar {
         std::vector<uint8_t> bgra;     // kPsfStamp x kPsfStamp, BGRA (rotated)
@@ -115,7 +115,7 @@ private:
     struct IDWriteFactory*    dwrite_factory_ = nullptr;
     struct IDWriteTextFormat* text_           = nullptr;
 
-    // Visuel state.
+    // Visual state.
     std::vector<Crop>         crops_;
     std::vector<ID2D1Bitmap*> tiles_;
     bool have_crops_ = false;
@@ -125,7 +125,7 @@ private:
     int  last_visual_C_   = -1;
     int  last_visual_rot_ = -1;
 
-    // Inspecté state.
+    // Inspected state.
     std::shared_ptr<const fitsx::FitsImage> img_;
     const fitsx::FitsImage*   plate_for_ = nullptr;   // image the plate was built for
     int                       plate_grid_ = 0;

@@ -213,8 +213,8 @@ LRESULT AberrationWindow::on_bar_customdraw(LPNMTBCUSTOMDRAW nm) const {
             ::DeleteObject(br);
             const wchar_t* label = (id == kIdGrid3)   ? L"3×3"
                                  : (id == kIdGrid5)   ? L"5×5"
-                                 : (id == kIdVisual)  ? L"Visuel"
-                                 : (id == kIdInspect) ? L"Inspecté" : L"";
+                                 : (id == kIdVisual)  ? L"Visual"
+                                 : (id == kIdInspect) ? L"Inspected" : L"";
             HFONT old = static_cast<HFONT>(::SelectObject(hdc, bar_font_));
             COLORREF fg = ((st & CDIS_HOT) || (st & CDIS_SELECTED) || (st & CDIS_CHECKED))
                         ? kTbAccent : kTbFg;
@@ -510,7 +510,8 @@ void AberrationWindow::render_inspected() {
         if (text_) {
             br_accent_->SetColor(kFrame);
             RECT rc; ::GetClientRect(hwnd_, &rc);
-            rt_->DrawTextW(L"Analyse PSF…", 12, text_,
+            static constexpr wchar_t kBusy[] = L"Analysing PSF…";
+            rt_->DrawTextW(kBusy, ARRAYSIZE(kBusy) - 1, text_,
                 D2D1::RectF(12, kBarH + 12.0f, static_cast<float>(rc.right) - 8, kBarH + 34.0f),
                 br_accent_);
             br_accent_->SetColor(kAccent);

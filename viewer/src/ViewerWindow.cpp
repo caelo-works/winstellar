@@ -1059,8 +1059,8 @@ void ViewerWindow::refresh_tilt_window() {
 void ViewerWindow::push_aberration() {
     if (!aberration_.is_visible()) return;
     aberration_.set_rotation(rotation_deg_);   // match the on-screen orientation
-    aberration_.set_image(image_);       // Inspecté: stores the linear image
-    aberration_.set_source(rendered_);   // Visuel: crops from the rendered frame
+    aberration_.set_image(image_);       // Inspected: stores the linear image
+    aberration_.set_source(rendered_);   // Visual: crops from the rendered frame
     // Inspected mode needs a PSF plate -- compute it off the UI thread (it lands
     // via on_psf_finished -> aberration_.set_plate). needs_plate() is false once
     // the plate for this image/grid is in, so rotation/re-stretch don't re-run it.
