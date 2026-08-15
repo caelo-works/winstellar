@@ -2,6 +2,7 @@
 
 #include "fits_core/analysis.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -113,4 +114,24 @@ void AnalysisView::set_visible(bool v) {
 
 void AnalysisView::resize(int x, int y, int cx, int cy) {
     if (list_) ::MoveWindow(list_, x, y, cx, cy, TRUE);
+}
+
+int AnalysisView::content_height() const {
+    constexpr int kFallback = 120;
+    if (!list_) return kFallback;
+
+    const int rows = ListView_GetItemCount(list_);
+    if (rows <= 0) return kFallback;
+
+    RECT r{};
+    if (!ListView_GetItemRect(list_, 0, &r, LVIR_BOUNDS)) return kFallback;
+    const int row_h = std::max<LONG>(1, r.bottom - r.top);
+
+    int header_h = 0;
+    if (HWND hdr = ListView_GetHeader(list_)) {
+        RECT hr{};
+        if (::GetWindowRect(hdr, &hr)) header_h = hr.bottom - hr.top;
+    }
+    // A couple of pixels of slack so the last row is never clipped by a border.
+    return header_h + rows * row_h + 4;
 }

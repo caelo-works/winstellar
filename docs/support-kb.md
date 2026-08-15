@@ -298,6 +298,8 @@ The tooltips are the exact labels the user sees:
 - **Inspection tools (stars / tilt / aberration)**
 - **Show / hide measurements (A)**
 - **Show / hide FITS headers (H)**
+- **About WinStellar, shortcuts and updates** — the `?` button at the far right
+  (1.0.0 and later). Opens the About window.
 
 **The stretch is a display setting only: WinStellar never modifies the file it
 opened.** From **0.8.0** it can WRITE a new file — see the Export section — but
@@ -427,6 +429,33 @@ complete, so an interrupted export leaves the previous file untouched.
 
 ---
 
+## The About window and the right-click menu
+
+**Both from 1.0.0.**
+
+**The About window** opens from the **`?` button** at the right end of the toolbar.
+It shows the version, the **exact build** (version, commit and date) — which is
+what to ask for on a bug report, rather than sending the user to Properties →
+Details — the licence, links to the website, the releases page and the issue
+tracker, the **update setting**, and the **complete list of keyboard shortcuts**.
+
+**Right-clicking the image** opens a menu with:
+
+- **Copy measurements** — puts the measurements panel on the clipboard as plain
+  text, one metric per line, with the file name on the first line. For observing
+  logs; before 1.0.0 the numbers had to be retyped.
+- **Open file location** — shows the open file in Explorer, selected.
+- **Export image…** — the same four formats as the toolbar button.
+
+Entries that do not apply are greyed rather than missing: **Open file location**
+needs a file opened from disk, and the other two need an image loaded.
+
+**The inspection windows remember where they were left** (1.0.0 and later), per
+window. A position saved on a monitor that is no longer connected is ignored, so
+a window can never come back off-screen.
+
+---
+
 ## Updates — how WinStellar checks, and how to turn it off
 
 **Only from 0.9.0.** Earlier versions never check; see the installation section.
@@ -446,10 +475,14 @@ WinStellar closes so its files can be replaced.
 **It never downgrades.** A published version older than the one running is never
 offered.
 
-**To turn it off**, set the `UpdateCheck` value to `0` under
-`HKEY_CURRENT_USER\Software\WinStellar` (a DWORD, `1` by default). There is no
-setting in the interface yet. The same key holds `UpdateLastCheck`, the date of
-the last check.
+**To turn it off from 1.0.0**, open the **About** window (the `?` button on the
+toolbar) and untick **Check for updates automatically**. That window also has a
+**Check for updates now** link that reports the answer on the spot.
+
+On **0.9.0** there is no setting in the interface: set the `UpdateCheck` value to
+`0` under `HKEY_CURRENT_USER\Software\WinStellar` (a DWORD, `1` by default). That
+key still works on 1.0.0, and also holds `UpdateLastCheck`, the date of the last
+check.
 
 **What is sent:** nothing but an ordinary HTTPS request to github.com for the
 latest release address. No account, no identifier, no usage data.

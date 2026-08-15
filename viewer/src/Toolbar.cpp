@@ -23,6 +23,7 @@ constexpr int kCmd_NextFile       = 112;
 constexpr int kCmd_ToggleHistogram= 113;
 constexpr int kCmd_Inspect        = 114;
 constexpr int kCmd_Export         = 120;
+constexpr int kCmd_About          = 125;
 
 constexpr int kButtonW = 44;
 constexpr int kButtonH = 44;  // matches Toolbar::kHeight so buttons fill the bar
@@ -86,6 +87,8 @@ constexpr ButtonSpec kButtons[] = {
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_ToggleAnalysis,  L"\xE9F9", L"Show / hide measurements (A)",     false, true },
     { kCmd_ToggleHeaders,   L"\xE946", L"Show / hide FITS headers (H)",     false, true },
+    { 0,                    L"",       L"",                                  false, false }, // separator
+    { kCmd_About,           L"\xE897", L"About WinStellar, shortcuts and updates", false, false },
 };
 
 }  // namespace

@@ -151,6 +151,7 @@ bool AberrationWindow::create(HWND owner, HINSTANCE hinst) {
     create_toolbar();
 
     apply_dark_titlebar(hwnd_, kBgColorRef);
+    restore_popup_placement(hwnd_, L"Aberration");
 
     resize_to_grid();
     init_d2d();
@@ -235,6 +236,7 @@ LRESULT AberrationWindow::on_bar_customdraw(LPNMTBCUSTOMDRAW nm) const {
 }
 
 void AberrationWindow::destroy() {
+    save_popup_placement(hwnd_, L"Aberration");
     release_d2d();
     safe_release(text_);
     safe_release(dwrite_factory_);
