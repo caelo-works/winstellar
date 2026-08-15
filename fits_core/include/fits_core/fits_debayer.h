@@ -35,6 +35,23 @@ void debayer_bilinear(const std::vector<float>& cfa, int w, int h,
                       std::vector<float>& g,
                       std::vector<float>& b);
 
+// Bayer pattern of the array once the DISPLAY has been rotated `display_rotation_deg`
+// clockwise. `xoff`/`yoff` are the source XBAYROFF/YBAYROFF; they are folded into
+// the result, so a caller writes the returned pattern with XBAYROFF = YBAYROFF = 0.
+// `w`/`h` are the SOURCE array dimensions: odd values shift the tile phase, which
+// is why this is evaluated rather than looked up in a table.
+//
+// This matters because rotating a CFA mosaic changes the effective pattern. Writing
+// the rotated mosaic while keeping the original BAYERPAT produces a file that opens
+// fine and demosaics with swapped colours -- silent, and invisible in the file
+// itself. Returns None only when `src` is None.
+[[nodiscard]] BayerPattern rotate_bayer_pattern(BayerPattern src, int xoff, int yoff,
+                                                int w, int h,
+                                                int display_rotation_deg) noexcept;
+
+// "RGGB" / "BGGR" / "GRBG" / "GBRG", or "" for None. Never null.
+[[nodiscard]] const char* bayer_pattern_name(BayerPattern p) noexcept;
+
 // Gray-world white balance: scale each channel by a per-channel gain so the
 // three background medians match, neutralizing the green cast inherent to a
 // raw OSC frame (2x green photosites). Operates in place. Gains are clamped

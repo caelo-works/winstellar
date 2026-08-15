@@ -8,6 +8,8 @@ add_library(fits_core STATIC
     src/fits_render.cpp
     src/fits_debayer.cpp
     src/fits_headers.cpp
+    src/export_pixels.cpp
+    src/fits_writer.cpp
     src/xisf_loader.cpp
     src/raw_loader.cpp
     src/analysis.cpp
