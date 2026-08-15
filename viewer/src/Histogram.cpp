@@ -1,5 +1,7 @@
 #include "Histogram.h"
 
+#include "D2DPopup.h"
+
 #include <dwmapi.h>
 #include <windowsx.h>
 
@@ -70,6 +72,7 @@ bool HistogramWindow::create(HWND owner, HINSTANCE hinst) {
         x, y, w, h, owner, nullptr, hinst, this);
     if (!hwnd_) return false;
 
+    restore_popup_placement(hwnd_, L"Histogram");
     // Dark caption to match the rest of the app.
     BOOL dark = TRUE;
     ::DwmSetWindowAttribute(hwnd_, /*USE_IMMERSIVE_DARK_MODE*/ 20, &dark, sizeof(dark));
@@ -109,6 +112,7 @@ bool HistogramWindow::create(HWND owner, HINSTANCE hinst) {
 }
 
 void HistogramWindow::destroy() {
+    save_popup_placement(hwnd_, L"Histogram");
     release_d2d();
     if (btn_font_) { ::DeleteObject(btn_font_); btn_font_ = nullptr; }
     if (hwnd_) { ::DestroyWindow(hwnd_); hwnd_ = nullptr; }

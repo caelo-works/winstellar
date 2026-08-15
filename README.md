@@ -40,6 +40,7 @@ suite** (tilt, aberration, background).
 | 🌈 **Color & RAW** | One-shot-color **Bayer debayering** and **camera-RAW** decoding across all major manufacturers, rendered in color through the same pipeline as FITS. |
 | ⚡ **Light & native** | A small native **Win32 / Direct2D** app — no runtime, no clutter. A **SQLite** analysis cache makes re-browsing a folder instant. |
 | 🔄 **Stays current** | Checks once a day for a new release and offers to install it, verifying the download against its published SHA-256. Off with a single registry value. |
+| ✨ **Finished touches** | An **About** window with version, build, links and shortcuts; a **right-click menu** to copy the measurements or reveal the file in Explorer; dark menus throughout; inspection windows that remember where you put them. |
 
 ## Supported formats
 

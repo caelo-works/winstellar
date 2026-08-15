@@ -2,6 +2,8 @@
 
 #include "InspectColor.h"
 
+#include <dwrite.h>
+
 #include "fits_core/fits_loader.h"
 #include "fits_core/analysis.h"
 #include "fits_core/background.h"
@@ -10,10 +12,13 @@
 #include "fits_core/fits_writer.h"
 #include "fits_version.h"
 #include "UpdateCheck.h"
+#include "AboutWindow.h"
+#include "DarkMenu.h"
 
 #include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 #include <uxtheme.h>
 #include <windowsx.h>
@@ -21,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -209,6 +215,9 @@ constexpr int kCmd_ExportJpg      = 121;
 constexpr int kCmd_ExportPng      = 122;
 constexpr int kCmd_ExportTif      = 123;
 constexpr int kCmd_ExportFits     = 124;
+constexpr int kCmd_About          = 125;
+constexpr int kCmd_CopyMetrics    = 126;
+constexpr int kCmd_RevealInExplorer = 127;
 
 // Worker → UI postback. wParam = generation, lParam = ViewerWindow::LoadResult*.
 constexpr UINT  WM_APP_LOAD_DONE   = WM_APP + 1;
@@ -229,6 +238,10 @@ constexpr UINT  WM_APP_ANALYSIS_DONE = WM_APP + 6;
 constexpr UINT  WM_APP_EXPORT_DONE = WM_APP + 7;
 // Update-check worker -> UI postback. lParam = wsu::UpdateCheckResult*.
 constexpr UINT  WM_APP_UPDATE_DONE = WM_APP + 8;
+
+// Shown centred in the viewport when nothing is loaded.
+constexpr wchar_t kEmptyHint[] =
+    L"Open a frame with Ctrl+O, or drop a FITS, XISF or camera RAW file here";
 // Spinner animation timer (~60 Hz). Only running while loading_ is true.
 constexpr UINT_PTR kTimerSpinner = 1;
 constexpr float    kSpinnerRadius = 24.0f;  // dot orbit radius, in DIPs
@@ -554,6 +567,19 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_APP_EXPORT_DONE:
             self->on_export_finished(reinterpret_cast<wsx::ExportOutcome*>(lp));
             return 0;
+        case WM_MEASUREITEM:
+            if (darkmenu::on_measure_item(reinterpret_cast<MEASUREITEMSTRUCT*>(lp)))
+                return TRUE;
+            break;
+        case WM_DRAWITEM:
+            if (darkmenu::on_draw_item(reinterpret_cast<const DRAWITEMSTRUCT*>(lp)))
+                return TRUE;
+            break;
+        case WM_CONTEXTMENU: {
+            const int sx = GET_X_LPARAM(lp), sy = GET_Y_LPARAM(lp);
+            self->show_context_menu(sx, sy);
+            return 0;
+        }
         case WM_APP_UPDATE_DONE:
             self->on_update_available(reinterpret_cast<wsu::UpdateCheckResult*>(lp));
             return 0;
@@ -566,6 +592,9 @@ LRESULT CALLBACK ViewerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 }
 
 void ViewerWindow::init_d2d_factory() {
+    if (!dwrite_factory_)
+        ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                              reinterpret_cast<IUnknown**>(&dwrite_factory_));
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2d_factory_);
 }
 
@@ -593,6 +622,7 @@ void ViewerWindow::create_render_target() {
 }
 
 void ViewerWindow::release_render_target() {
+    safe_release(empty_text_);
     safe_release(bitmap_);
     safe_release(veil_brush_);
     safe_release(spinner_brush_);
@@ -632,9 +662,14 @@ void ViewerWindow::update_title() {
     wchar_t title[1280] = {};
     const int zoom_pct = static_cast<int>(zoom_ * 100.0f + 0.5f);
     if (!loaded_path_.empty()) {
-        swprintf_s(title, L"WinStellar — %s — %d%%", loaded_path_.c_str(), zoom_pct);
+        // File name FIRST: the taskbar truncates the end, and with the full path
+        // in front the only useful part was the part that got cut off.
+        const size_t slash = loaded_path_.find_last_of(L"\\/");
+        const wchar_t* name = (slash == std::wstring::npos)
+                            ? loaded_path_.c_str() : loaded_path_.c_str() + slash + 1;
+        swprintf_s(title, L"%s — %d%% — WinStellar", name, zoom_pct);
     } else {
-        swprintf_s(title, L"WinStellar — %d%%", zoom_pct);
+        swprintf_s(title, L"WinStellar");
     }
     // There is no progress bar: neither WIC nor CFITSIO reports progress. The
     // title suffix and the greyed Export button are the feedback.
@@ -1347,6 +1382,12 @@ void ViewerWindow::on_load_analysis_finished(std::uint64_t gen, LoadAnalysis* ra
     if (!hwnd_ || !::IsWindow(hwnd_)) return;
 
     analysis_.update(r->analysis);
+    // The panel sizes itself from the rows it actually holds, and it only holds
+    // them now: the layout that ran at load time measured an empty list and
+    // fell back to the minimum. Without this it stayed too small until the user
+    // toggled the panel off and on again.
+    layout();
+
     // Cache miss carried the fresh per-star detail -- adopt it so the first
     // overlay reuses it. Cache hit: no detail, fall back to the lazy worker.
     if (r->has_detail) {
@@ -1404,8 +1445,11 @@ void ViewerWindow::layout() {
 
     if (show_a && show_h) {
         // Both panels stacked: analysis on top (capped), headers fills the rest.
-        const int analysis_h = std::min<LONG>(AnalysisView::kPreferredHeight,
-                                              panel_h / 2);
+        // Hug the rows actually present instead of a fixed 280 px, which was
+        // both wrong at high DPI and left blank space (or a scrollbar) as the
+        // metric list changed. Still capped at half the column so the headers
+        // panel keeps a usable share.
+        const int analysis_h = std::min<LONG>(analysis_.content_height(), panel_h / 2);
         analysis_.resize(panel_x, top_below_toolbar, kHeaderPanelWidth, analysis_h);
         headers_.resize (panel_x, top_below_toolbar + analysis_h,
                          kHeaderPanelWidth, std::max<LONG>(0, panel_h - analysis_h));
@@ -1531,6 +1575,32 @@ void ViewerWindow::render() {
                     D2D1::Ellipse(D2D1::Point2F(cx + dx, cy + dy), 3.5f, 3.5f),
                     spinner_brush_);
             }
+        }
+    }
+
+    // Empty state. Without this the very first thing a new user sees is a black
+    // rectangle with no indication that anything is expected of them.
+    if (rendered_.width <= 0 && !loading_) {
+        if (!spinner_brush_)
+            rt_->CreateSolidColorBrush(D2D1::ColorF(0x8b93a0), &spinner_brush_);
+        if (!empty_text_ && dwrite_factory_) {
+            dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr,
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 15.0f, L"", &empty_text_);
+            if (empty_text_) {
+                empty_text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                empty_text_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            }
+        }
+        if (spinner_brush_ && empty_text_) {
+            spinner_brush_->SetOpacity(1.0f);
+            spinner_brush_->SetColor(D2D1::ColorF(0x8b93a0));
+            rt_->DrawTextW(kEmptyHint, ARRAYSIZE(kEmptyHint) - 1, empty_text_,
+                           D2D1::RectF(static_cast<float>(vpr.left) + 20.0f,
+                                       static_cast<float>(vpr.top),
+                                       static_cast<float>(vpr.right) - 20.0f,
+                                       static_cast<float>(vpr.bottom)),
+                           spinner_brush_);
         }
     }
 
@@ -1743,6 +1813,20 @@ void ViewerWindow::on_command(int id) {
         case kCmd_Export:
             show_export_menu();
             break;
+        case kCmd_About: {
+            AboutWindow about;
+            about.show(hwnd_, hinst_);
+            ::SetFocus(hwnd_);
+            break;
+        }
+        case kCmd_CopyMetrics:
+            copy_measurements();
+            ::SetFocus(hwnd_);
+            break;
+        case kCmd_RevealInExplorer:
+            reveal_in_explorer();
+            ::SetFocus(hwnd_);
+            break;
         case kCmd_ExportJpg:
         case kCmd_ExportPng:
         case kCmd_ExportTif:
@@ -1852,14 +1936,22 @@ void ViewerWindow::show_export_menu() {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) return;
 
+    // Two glyphs, not four: they encode the split that actually matters here --
+    // a picture of what is on screen, versus the data underneath it.
+    static const DarkMenuItem kItems[] = {
+        { L"\xE91B", L"JPEG — as displayed (stretched)"   },
+        { L"\xE91B", L"PNG — as displayed (stretched)"    },
+        { nullptr,   nullptr                              },
+        { L"\xE7C3", L"TIFF — linear 16-bit (unstretched)" },
+        { L"\xE7C3", L"FITS — original data (unstretched)" },
+    };
     const bool have = (image_ && !image_->empty());
-    for (const auto& s : kExportFormats) {
-        UINT flags = MF_STRING;
-        if (!have) flags |= MF_GRAYED;
-        ::AppendMenuW(menu, flags, static_cast<UINT_PTR>(s.cmd), s.menu);
-        if (s.cmd == kCmd_ExportPng)
-            ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    }
+    darkmenu::apply(menu);
+    darkmenu::append(menu, kCmd_ExportJpg,  &kItems[0], have);
+    darkmenu::append(menu, kCmd_ExportPng,  &kItems[1], have);
+    darkmenu::append(menu, 0,               &kItems[2]);
+    darkmenu::append(menu, kCmd_ExportTif,  &kItems[3], have);
+    darkmenu::append(menu, kCmd_ExportFits, &kItems[4], have);
 
     POINT pt{};
     HWND tb = toolbar_.hwnd();
@@ -1974,22 +2066,115 @@ void ViewerWindow::start_export(int cmd) {
     submit_export(std::move(job));
 }
 
+
+// Right-click on the image. The two entries here had no natural home: neither
+// belongs on the toolbar, and the application has no menu bar.
+void ViewerWindow::show_context_menu(int screen_x, int screen_y) {
+    if (screen_x == -1 && screen_y == -1) {      // keyboard menu key
+        RECT r = viewport_rect();
+        POINT p{ (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+        ::ClientToScreen(hwnd_, &p);
+        screen_x = p.x;
+        screen_y = p.y;
+    }
+    HMENU menu = ::CreatePopupMenu();
+    if (!menu) return;
+
+    // Glyphs are Segoe MDL2, the same set the toolbar draws from -- Export uses
+    // the very glyph on its toolbar button, so the two read as the same action.
+    static const DarkMenuItem kCopy   { L"\xE8C8", L"Copy measurements"  };
+    static const DarkMenuItem kReveal { L"\xE838", L"Open file location" };
+    static const DarkMenuItem kSep    { nullptr,   nullptr               };
+    static const DarkMenuItem kExport { L"\xE74E", L"Export image…"      };
+
+    const bool have = (image_ && !image_->empty());
+    darkmenu::apply(menu);
+    darkmenu::append(menu, kCmd_CopyMetrics,      &kCopy,   have);
+    darkmenu::append(menu, kCmd_RevealInExplorer, &kReveal, !loaded_path_.empty());
+    darkmenu::append(menu, 0,                     &kSep);
+    darkmenu::append(menu, kCmd_Export,           &kExport, have);
+
+    ::TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+                     screen_x, screen_y, 0, hwnd_, nullptr);
+    ::DestroyMenu(menu);
+}
+
+// Copy the measurements panel as plain text. Astrophotographers keep session
+// logs; without this the numbers have to be retyped by hand.
+void ViewerWindow::copy_measurements() {
+    HWND list = analysis_.hwnd();
+    if (!list) return;
+    const int rows = ListView_GetItemCount(list);
+    if (rows <= 0) return;
+
+    std::wstring text;
+    if (!loaded_path_.empty()) {
+        const size_t slash = loaded_path_.find_last_of(L"\\/");
+        text += (slash == std::wstring::npos) ? loaded_path_ : loaded_path_.substr(slash + 1);
+        text += L"\r\n";
+    }
+    for (int i = 0; i < rows; ++i) {
+        wchar_t metric[128] = {}, value[128] = {};
+        ListView_GetItemText(list, i, 0, metric, ARRAYSIZE(metric));
+        ListView_GetItemText(list, i, 1, value,  ARRAYSIZE(value));
+        text += metric;
+        text += L"\t";
+        text += value;
+        text += L"\r\n";
+    }
+
+    if (!::OpenClipboard(hwnd_)) return;
+    ::EmptyClipboard();
+    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    if (HGLOBAL mem = ::GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+        if (void* p = ::GlobalLock(mem)) {
+            std::memcpy(p, text.c_str(), bytes);
+            ::GlobalUnlock(mem);
+            if (!::SetClipboardData(CF_UNICODETEXT, mem)) ::GlobalFree(mem);
+        } else {
+            ::GlobalFree(mem);
+        }
+    }
+    ::CloseClipboard();
+}
+
+// Show the open file in Explorer, selected. Natural for a tool whose whole
+// identity is living inside Explorer.
+void ViewerWindow::reveal_in_explorer() {
+    if (loaded_path_.empty()) return;
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (SUCCEEDED(::SHParseDisplayName(loaded_path_.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        ::SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+        ::CoTaskMemFree(pidl);
+        return;
+    }
+    // Fallback: open the containing folder without selecting.
+    const size_t slash = loaded_path_.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        ::ShellExecuteW(nullptr, L"open", loaded_path_.substr(0, slash).c_str(),
+                        nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 void ViewerWindow::show_inspect_menu() {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) return;
 
+    // These are all toggles, so the icon column answers the only question that
+    // varies -- is it on -- rather than carrying decoration.
+    static const DarkMenuItem kStars { nullptr, L"Star markers"           };
+    static const DarkMenuItem kTilt  { nullptr, L"Tilt diagram…"          };
+    static const DarkMenuItem kSep   { nullptr, nullptr                   };
+    static const DarkMenuItem kAberr { nullptr, L"Aberration inspector…"  };
+    static const DarkMenuItem kBackg { nullptr, L"Background map…"        };
+
     const bool have = (image_ != nullptr);
-    auto item = [&](int id, const wchar_t* text, bool checked) {
-        UINT flags = MF_STRING;
-        if (checked)  flags |= MF_CHECKED;
-        if (!have)    flags |= MF_GRAYED;
-        ::AppendMenuW(menu, flags, static_cast<UINT_PTR>(id), text);
-    };
-    item(kCmd_InspectStars, L"Star markers",        show_stars_);
-    item(kCmd_InspectTilt,  L"Tilt diagram…",       tilt_window_.is_visible());
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    item(kCmd_InspectPanel,      L"Aberration inspector…", aberration_.is_visible());
-    item(kCmd_InspectBackground, L"Background map…",        background_window_.is_visible());
+    darkmenu::apply(menu);
+    darkmenu::append(menu, kCmd_InspectStars, &kStars, have, show_stars_);
+    darkmenu::append(menu, kCmd_InspectTilt,  &kTilt,  have, tilt_window_.is_visible());
+    darkmenu::append(menu, 0,                 &kSep);
+    darkmenu::append(menu, kCmd_InspectPanel, &kAberr, have, aberration_.is_visible());
+    darkmenu::append(menu, kCmd_InspectBackground, &kBackg, have,
+                     background_window_.is_visible());
 
     // Drop the menu just below the toolbar's Inspect button.
     POINT pt{};

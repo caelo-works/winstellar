@@ -55,12 +55,14 @@ bool TiltWindow::create(HWND owner, HINSTANCE hinst) {
     if (!hwnd_) return false;
 
     apply_dark_titlebar(hwnd_, kBgColorRef);
+    restore_popup_placement(hwnd_, L"Tilt");
 
     init_d2d();
     return true;
 }
 
 void TiltWindow::destroy() {
+    save_popup_placement(hwnd_, L"Tilt");
     release_d2d();
     safe_release(text_);
     safe_release(head_);

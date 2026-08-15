@@ -11,6 +11,7 @@ add_executable(WinStellar WIN32
     src/ImageExport.cpp
     src/UpdateInfo.cpp
     src/UpdateCheck.cpp
+    src/AboutWindow.cpp
     src/viewer.rc
 )
 

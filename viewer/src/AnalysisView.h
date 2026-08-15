@@ -18,8 +18,10 @@ public:
     void resize(int x, int y, int cx, int cy);
     HWND hwnd() const noexcept { return list_; }
 
-    // Sized to fit all 11 rows + header without scrolling.
-    static constexpr int kPreferredHeight = 280;
+    // Height that shows every current row plus the header without scrolling,
+    // measured from the control itself so it follows both the row count and the
+    // display's DPI. Falls back to a sane minimum when the list is empty.
+    [[nodiscard]] int content_height() const;
 
 private:
     HWND list_ = nullptr;

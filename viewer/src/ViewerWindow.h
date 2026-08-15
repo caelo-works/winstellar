@@ -80,6 +80,9 @@ private:
     // Export: the toolbar button opens the format menu; start_export runs the
     // save dialog for one format and queues the job.
     void show_export_menu();
+    void show_context_menu(int screen_x, int screen_y);
+    void copy_measurements();
+    void reveal_in_explorer();
     void start_export(int cmd);
     void ensure_detailed();           // request detailed analysis if not ready
     void refresh_tilt_window();       // push the current tilt result if open
@@ -138,6 +141,10 @@ private:
     // first paint, released with the render target.
     ID2D1SolidColorBrush* veil_brush_   = nullptr;
     ID2D1SolidColorBrush* spinner_brush_= nullptr;
+
+    // Only used for the empty-state hint; the rest of the viewport is bitmaps.
+    struct IDWriteFactory*    dwrite_factory_ = nullptr;
+    struct IDWriteTextFormat* empty_text_     = nullptr;
 
     // Inspection-overlay brush. RT-bound (its colour is reset per primitive),
     // lazily initialized in draw_overlays().
