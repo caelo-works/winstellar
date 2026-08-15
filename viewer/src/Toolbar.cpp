@@ -22,6 +22,7 @@ constexpr int kCmd_PrevFile       = 111;
 constexpr int kCmd_NextFile       = 112;
 constexpr int kCmd_ToggleHistogram= 113;
 constexpr int kCmd_Inspect        = 114;
+constexpr int kCmd_Export         = 120;
 
 constexpr int kButtonW = 44;
 constexpr int kButtonH = 44;  // matches Toolbar::kHeight so buttons fill the bar
@@ -65,6 +66,7 @@ LRESULT CALLBACK toolbar_subproc(HWND h, UINT m, WPARAM w, LPARAM l,
 //         Analysis / Headers (sidebar toggles)
 constexpr ButtonSpec kButtons[] = {
     { kCmd_Open,            L"\xE8E5", L"Open... (Ctrl+O)",                false, false },
+    { kCmd_Export,          L"\xE74E", L"Export image (Ctrl+S)",           false, false },
     { 0,                    L"",       L"",                                  false, false }, // separator
     { kCmd_PrevFile,        L"\xE76B", L"Previous image (← / PgUp)",   false, false },
     { kCmd_NextFile,        L"\xE76C", L"Next image (→ / PgDn)",       false, false },
@@ -194,6 +196,11 @@ void Toolbar::set_nav_enabled(bool enabled) {
     if (!hwnd_) return;
     ::SendMessageW(hwnd_, TB_ENABLEBUTTON, kCmd_PrevFile, MAKELPARAM(enabled ? TRUE : FALSE, 0));
     ::SendMessageW(hwnd_, TB_ENABLEBUTTON, kCmd_NextFile, MAKELPARAM(enabled ? TRUE : FALSE, 0));
+}
+
+void Toolbar::set_enabled(int cmd_id, bool enabled) {
+    if (!hwnd_) return;
+    ::SendMessageW(hwnd_, TB_ENABLEBUTTON, cmd_id, MAKELPARAM(enabled ? TRUE : FALSE, 0));
 }
 
 LRESULT Toolbar::on_customdraw(LPNMTBCUSTOMDRAW nm) const {

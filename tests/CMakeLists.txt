@@ -45,11 +45,17 @@ winstellar_add_test_exe(unit_xisf_magic unit_xisf_magic.cpp)
 winstellar_add_test_exe(unit_cache_key  unit_cache_key.cpp)
 winstellar_add_test_exe(unit_debayer    unit_debayer.cpp)
 winstellar_add_test_exe(unit_raw        unit_raw.cpp)
+winstellar_add_test_exe(unit_export_pixels unit_export_pixels.cpp)
 
 # Header-only inspection-rotation helpers live in viewer/src; give this one test
 # access to that include dir (no link against the viewer needed).
 winstellar_add_test_exe(unit_rotation   unit_rotation.cpp)
 target_include_directories(unit_rotation PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
+
+# Export geometry checks fits_core's rotation map against that same viewer-side
+# helper, so it needs the include dir too.
+winstellar_add_test_exe(unit_export_geometry unit_export_geometry.cpp)
+target_include_directories(unit_export_geometry PRIVATE ${CMAKE_SOURCE_DIR}/viewer/src)
 
 # ---------- Phase 2: integration tests (file/buffer I/O) -------------------
 winstellar_add_test_exe(integration_fits_loader integration_fits_loader.cpp)
@@ -57,6 +63,7 @@ winstellar_add_test_exe(integration_xisf        integration_xisf.cpp)
 winstellar_add_test_exe(integration_raw         integration_raw.cpp)
 winstellar_add_test_exe(integration_analysis    integration_analysis.cpp)
 winstellar_add_test_exe(integration_cache       integration_cache.cpp)
+winstellar_add_test_exe(integration_fits_export integration_fits_export.cpp)
 
 # ---------- Phase 3: shell-extension DLL smoke ----------------------------
 # Runs after the DLL is built; locates it via $<TARGET_FILE:WinStellarShellExt>
@@ -97,6 +104,29 @@ target_compile_definitions(smoke_viewer PRIVATE
     WINSTELLAR_EXE_PATH="$<TARGET_FILE:WinStellar>"
 )
 gtest_discover_tests(smoke_viewer
+    PROPERTIES LABELS "winstellar;smoke"
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------- Phase 5: viewer --export smoke ---------------------------------
+# The only automated coverage of the WIC lane: encoding needs COM, a real
+# encoder and a real file, so it runs the shipped executable as a child.
+add_executable(smoke_export smoke_export.cpp)
+target_link_libraries(smoke_export PRIVATE
+    winstellar_test_helpers
+    GTest::gtest
+    GTest::gtest_main
+)
+set_target_properties(smoke_export PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+)
+add_dependencies(smoke_export WinStellar)
+target_compile_definitions(smoke_export PRIVATE
+    WINSTELLAR_EXE_PATH="$<TARGET_FILE:WinStellar>"
+)
+# The LABELS property matters: scripts/test.ps1 and CI filter on
+# --label-regex winstellar, so a target without it builds and never runs.
+gtest_discover_tests(smoke_export
     PROPERTIES LABELS "winstellar;smoke"
     DISCOVERY_TIMEOUT 60
 )
