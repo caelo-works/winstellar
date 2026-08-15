@@ -13,8 +13,12 @@ add_executable(WinStellar WIN32
 
 # Make Ninja re-build viewer.rc whenever the manifest XML changes — by default
 # CMake/Ninja only depend on the .rc file itself, not on referenced assets.
+# The generated version header is in the same boat, and it matters more: rc.exe
+# does not report its includes, so without this a version bump left the .res
+# stale and the binary went out stamped with the PREVIOUS version.
 set_property(SOURCE src/viewer.rc APPEND PROPERTY OBJECT_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/viewer.manifest")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/viewer.manifest"
+    "${CMAKE_BINARY_DIR}/generated/fits_version.h")
 
 target_include_directories(WinStellar PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

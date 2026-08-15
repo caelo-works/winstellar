@@ -10,6 +10,12 @@ add_library(WinStellarShellExt SHARED
     src/shell_ext.rc
 )
 
+# rc.exe does not report the headers it includes, so Ninja cannot see that
+# shell_ext.rc depends on the generated version header. Without this the .res
+# survives a version bump and the DLL ships stamped with the previous version.
+set_property(SOURCE src/shell_ext.rc APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_BINARY_DIR}/generated/fits_version.h")
+
 target_include_directories(WinStellarShellExt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
